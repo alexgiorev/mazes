@@ -4,6 +4,7 @@ import networkx
 import pdb
 
 from PIL import Image, ImageDraw
+from collections import deque
 
 class Rect:
     LEFT = (-1,0)
@@ -54,117 +55,91 @@ class Rect:
         return (tx+bx)//2, (ty+by)//2
 
 class MazeImage:
-    TUNNEL_COLOR = (255,255,255)
-    WALL_COLOR = (136,170,136)
-    CIRCLE_BORDER_COLOR = (0,0,255)
-    CIRCLE_INTERNALS_COLOR = (255,215,0)
-    COLORS = (TUNNEL_COLOR,
-              WALL_COLOR,
-              CIRCLE_BORDER_COLOR,
-              CIRCLE_INTERNALS_COLOR)
-
+    TUNNEL = (255,255,255)
+    WALL = (136,170,136)
+    CIRCLE_BORDER = (0,0,255)
+    CIRCLE_INTERNALS = (255,215,0)
+    COLORS = (TUNNEL, WALL, CIRCLE_BORDER, CIRCLE_INTERNALS)
+    VERTICAL = True
+    HORIZONTAL = False
+    
     def __init__(self,img):
         self.img = img
-        
+        self.draw = ImageDraw.Draw(img)
+        self.PROBE_LENGTH = 10
+    
     def in_tunnel(self,xy):
+        return self.closest_color(xy) == self.TUNNEL
+    
+    def closest_color(self,xy):
+        def dist(color1,color2):
+            # manhattan length
+            return (abs(color1[0]-color2[0]) +
+                    abs(color1[1]-color2[1]) +
+                    abs(color1[2]-color2[2]))
         color = self.img.getpixel(xy)
-        # return math.dist(color, self.TUNNEL_COLOR) <= 5
-        return color == (255,255,255)
+        distances = [(dist(COLOR,color),COLOR)
+                     for COLOR in MazeImage.COLORS]
+        return min(distances)[1]
 
     def junct_neighbor(self, junct, direction):
-        cursor = self._get_cursor(junct,direction)
-        if not self.in_tunnel(cursor.midpoint):
+        junct = junct.move(direction, amount=self.PROBE_LENGTH)
+        if not self.in_tunnel(junct.top_left):
             return None
+        orientation = (self.VERTICAL if direction in (Rect.LEFT, Rect.RIGHT)
+                       else self.HORIZONTAL)
         while True:
-            if not self.in_tunnel(cursor.midpoint):
-                # We've reached a dead end
-                return self._junct_from_dead_end_cursor(cursor,direction)
-            elif (self.in_tunnel(cursor.top_left)
-                  or self.in_tunnel(cursor.bottom_right)):
-                return self._junct_from_cursor(cursor,direction)
+            if not self.in_tunnel(junct.top_left):
+                # We've reached a dead end without finding a turn. Move back a
+                # bit and return the dead end junction
+                return junct.move(direction, -3)
             else:
-                cursor = cursor.move(direction)
-            cursor = cursor.move(direction)
+                tunnels = self._probe(junct,orientation)
+                if tunnels != (None, None):
+                    tunnel = tunnels[0] or tunnels[1]
+                    jx,jy = junct.top_left
+                    mx,my = self._tunnel_midpoint(tunnel,orientation)
+                    if orientation == self.VERTICAL:
+                        return Rect(top_left=(mx,jy), width=1, height=1)
+                    else:
+                        return Rect(top_left=(jx,my), width=1, height=1)
+                else:
+                    junct = junct.move(direction)
 
-    def _junct_from_dead_end_cursor(self,cursor,direction):
-        (left_x, up_y),(right_x, down_y) = (cursor.top_left, cursor.bottom_right)
-        if direction == Rect.UP:
-            junct = Rect(top_left=(left_x+1,up_y+1),
-                         width=cursor.width-2,
-                         height=cursor.width-2)
-        elif direction == Rect.DOWN:
-            junct = Rect(top_left=(left_x+1,up_y-1),
-                         width=cursor.width-2,
-                         height=cursor.width-2)
-        elif direction == Rect.LEFT:
-            junct = Rect(top_left=(left_x+1,up_y+1),
-                         width=cursor.height-2,
-                         height=cursor.height-2)
-        elif direction == Rect.RIGHT:
-            junct = Rect(top_left=(left_x-1,up_y+1),
-                         width=cursor.height-2,
-                         height=cursor.height-2)
-        return junct
+    def _probe(self,junct,orientation):
+        """Returns a pair of the pixel coordinates of the tunnels"""
+        directions = ((Rect.UP,Rect.DOWN) if orientation == self.VERTICAL
+                      else (Rect.LEFT,Rect.RIGHT))
+        tunnels = []
+        for direction in directions:
+            point = junct
+            for _ in range(self.PROBE_LENGTH):
+                point = point.move(direction)
+                if not self.in_tunnel(point.top_left):
+                    tunnels.append(None)
+                    break
+            else:
+                tunnels.append(point.top_left)
+        return tuple(tunnels)
 
-    def _junct_from_cursor(self,cursor,direction):
-        (left_x, up_y),(right_x, down_y) = (cursor.top_left, cursor.bottom_right)
-        if direction == Rect.UP:
-            width = cursor.width-2
-            height = self._move_cursor_to_wall(cursor,direction)
-            junct = Rect(top_left=(left_x+1,up_y-height+1),
-                         width=width, height=height)
-        elif direction == Rect.DOWN:
-            width = cursor.width-2
-            height = self._move_cursor_to_wall(cursor,direction)
-            junct = Rect(top_left=(left_x+1,up_y),
-                         width=width, height=height)
-        elif direction == Rect.LEFT:
-            height = cursor.height-2
-            width = 1+self._move_cursor_to_wall(cursor,direction)
-            junct = Rect(top_left=(left_x-width+1,up_y+1),
-                         width=width, height=height)
-        elif direction == Rect.RIGHT:
-            height = cursor.height-2
-            width = 1+self._move_cursor_to_wall(cursor,direction)            
-            junct = Rect(top_left=(left_x,up_y+1),
-                         width=width, height=height)
-        return junct
-
-    def _move_cursor_to_wall(self,cursor,direction):
-        count = 0
-        while (self.in_tunnel(cursor.top_left)
-               or self.in_tunnel(cursor.bottom_right)):
-            cursor = cursor.move(direction)
-            count += 1
-        return count
+    def _tunnel_midpoint(self,tunnel_xy,orientation):
+        directions = ((Rect.LEFT,Rect.RIGHT) if orientation == self.VERTICAL
+                      else (Rect.UP,Rect.DOWN))
+        end_points = []
+        for direction in directions:
+            point = Rect(tunnel_xy,1,1)
+            while self.in_tunnel(point.top_left):
+                point = point.move(direction)
+            end_points.append(point.top_left)
+        (x1,y1),(x2,y2) = end_points
+        return (math.ceil((x1+x2)/2), math.ceil((y1+y2)/2))
             
-    def _get_cursor(self, junct, direction):
-        cursor = None
-        (left_x,up_y),(right_x,down_y) = (junct.top_left, junct.bottom_right)
-        if direction == Rect.UP:
-            cursor = Rect(top_left=(left_x-1,up_y-1),
-                          width=junct.width+2,
-                          height=1)
-        elif direction == Rect.DOWN:
-            cursor = Rect(top_left=(left_x-1,down_y+1),
-                          width=junct.width+2,
-                          height=1)
-        elif direction == Rect.LEFT:
-            cursor = Rect(top_left=(left_x-1,up_y-1),
-                          width=1,
-                          height=junct.height+2)
-        elif direction == Rect.RIGHT:
-            cursor = Rect(top_left=(right_x+1,up_y-1),
-                          width=1,
-                          height=junct.height+2)
-        return cursor
-            
-    def graph_from_img(img,root_junct):
+    def graph(self, root_junct):
         self._graph = graph = networkx.Graph()
         graph.add_node(root_junct)
-        dummy_junct = Rect(root_junct.top_left,
-                           root_junct.width,
-                           root_junct.height-30)
+        dummy_junct = Rect(top_left=(root_junct.top_left[0],
+                                     root_junct.top_left[1]-30),
+                           width=1, height=1)
         graph.add_edge(root_junct,dummy_junct)
         #════════════════════
         frontier = deque([root_junct])
@@ -200,37 +175,50 @@ class MazeImage:
         draw.rectangle((junct.top_left,junct.bottom_right),
                        outline=(157,11,11),
                        fill=(157,11,11))
+
+#════════════════════════════════════════
+# testing
     
-def test():
+def test_neighbors():
     maze_img = MazeImage(Image.open("maze1.jpg"))
-    junct = Rect((326,242),6,6)
-    neighbor = maze_img.junct_neighbor(junct,Rect.UP)
-    assert neighbor == Rect((326, 194),6,6)
+    junct = Rect((329,150),1,1)
+    left_neighbor = maze_img.junct_neighbor(junct,Rect.LEFT)
+    down_neighbor = maze_img.junct_neighbor(junct,Rect.DOWN)
+    assert left_neighbor == Rect((281, 150),1,1)
+    assert down_neighbor == Rect((329, 173),1,1)
     
-    junct = Rect((398,314),6,6)
-    neighbor = maze_img.junct_neighbor(junct,Rect.UP)
-    assert neighbor == Rect((398, 290),6,6)
-    
-    junct = Rect((398, 290),6,6)
-    neighbor = maze_img.junct_neighbor(junct,Rect.LEFT)
-    assert neighbor == Rect((374, 290),6,6)
+    junct = Rect((354, 166),1,1)
+    left_neighbor = maze_img.junct_neighbor(junct,Rect.LEFT)
+    right_neighbor = maze_img.junct_neighbor(junct,Rect.RIGHT)
+    up_neighbor = maze_img.junct_neighbor(junct,Rect.UP)
+    assert left_neighbor is right_neighbor is None
 
-    junct = Rect((374,338),6,6)
-    neighbor = maze_img.junct_neighbor(junct,Rect.LEFT)
-    assert neighbor == Rect((350,338),6,6)
-    neighbor = maze_img.junct_neighbor(junct,Rect.RIGHT)
-    assert neighbor == Rect((422,338),6,6)
+    junct = Rect((44,54),1,1)
+    down = maze_img.junct_neighbor(junct,Rect.DOWN)
+    assert down == Rect((44, 102),1,1)
+    right = maze_img.junct_neighbor(down,Rect.RIGHT)
+    assert right == Rect((114, 102),1,1)
+    up = maze_img.junct_neighbor(right,Rect.UP)
+    assert up == Rect((114, 54),1,1)
+    left = maze_img.junct_neighbor(up,Rect.LEFT)
+    assert left == Rect((90, 54),1,1)
+    down = maze_img.junct_neighbor(left,Rect.DOWN)
+    assert down == Rect((90, 78),1,1)
+    left = maze_img.junct_neighbor(down,Rect.LEFT)
+    assert left == Rect((68, 78),1,1)
 
-    junct = Rect((613,290),6,6)
-    cursor = maze_img._get_cursor(junct,Rect.DOWN)
-    neighbor = maze_img.junct_neighbor(junct,Rect.DOWN)
-    assert neighbor == Rect((613,314),6,6)
-
-def test():
+def draw_graph():
     maze_img = MazeImage(Image.open("maze1.jpg"))
-    junct = Rect((41,51),4,6)
-    neighbor = maze_img.junct_neighbor(junct,Rect.UP)
-
+    root_junct = Rect((43,53),1,1)
+    graph = maze_img.graph(root_junct)
+    for junct1, junct2 in graph.edges:
+        xy1, xy2 = junct1.top_left, junct2.top_left
+        maze_img.draw.line((xy1,xy2),fill=(0,0,0),width=1)
+    maze_img.img.save("maze1_graph.tiff")
+    
+#════════════════════════════════════════
+# misc scripts
+    
 def script0():
     img = Image.open("maze1.jpg")
     visible = (217,234,218)
@@ -253,11 +241,17 @@ def script1():
             img.putpixel((x,y),new_color)
     img.save("maze_script1.tiff")
 
-def script2():
+def manhattan_length(color1,color2):
+    return (abs(color1[0]-color2[0]) +
+            abs(color1[1]-color2[1]) +
+            abs(color1[2]-color2[2]))
+    
+def script3():
     img = Image.open("maze1.jpg")
     for x,y in itertools.product(range(img.width),range(img.height)):
         color = img.getpixel((x,y))
-        dist = math.dist(color,(255,255,255))
-        if math.dist(color,(255,255,255))<=
-            img.putpixel((x,y),visible)
-    img.save("maze_script2.tiff")
+        if color not in MazeImage.COLORS:            
+            distances = [(manhattan_length(COLOR,color),COLOR) for COLOR in MazeImage.COLORS]
+            new_color = min(distances)[1]
+            img.putpixel((x,y),new_color)
+    img.save("maze1_manhattan.tiff")
