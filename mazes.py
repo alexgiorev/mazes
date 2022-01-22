@@ -1,9 +1,10 @@
 import itertools
 import math
-import networkx
+import networkx as nx
 import pdb
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageColor
+get_color = ImageColor.getrgb
 from collections import deque
 
 class Rect:
@@ -59,6 +60,7 @@ class MazeImage:
     WALL = (136,170,136)
     CIRCLE_BORDER = (0,0,255)
     CIRCLE_INTERNALS = (255,215,0)
+    GOAL = (0,0,255)
     COLORS = (TUNNEL, WALL, CIRCLE_BORDER, CIRCLE_INTERNALS)
     VERTICAL = True
     HORIZONTAL = False
@@ -70,6 +72,9 @@ class MazeImage:
     
     def in_tunnel(self,xy):
         return self.closest_color(xy) == self.TUNNEL
+
+    def in_goal(self,xy):
+        return self.closest_color(xy) == self.GOAL
     
     def closest_color(self,xy):
         def dist(color1,color2):
@@ -84,15 +89,17 @@ class MazeImage:
 
     def junct_neighbor(self, junct, direction):
         junct = junct.move(direction, amount=self.PROBE_LENGTH)
-        if not self.in_tunnel(junct.top_left):
-            return None
+        if self.in_goal(junct.top_left):
+            return junct, True
+        elif not self.in_tunnel(junct.top_left):
+            return None, False
         orientation = (self.VERTICAL if direction in (Rect.LEFT, Rect.RIGHT)
                        else self.HORIZONTAL)
         while True:
             if not self.in_tunnel(junct.top_left):
                 # We've reached a dead end without finding a turn. Move back a
                 # bit and return the dead end junction
-                return junct.move(direction, -3)
+                return junct.move(direction, -3), False
             else:
                 tunnels = self._probe(junct,orientation)
                 if tunnels != (None, None):
@@ -100,9 +107,9 @@ class MazeImage:
                     jx,jy = junct.top_left
                     mx,my = self._tunnel_midpoint(tunnel,orientation)
                     if orientation == self.VERTICAL:
-                        return Rect(top_left=(mx,jy), width=1, height=1)
+                        return Rect(top_left=(mx,jy), width=1, height=1), False
                     else:
-                        return Rect(top_left=(jx,my), width=1, height=1)
+                        return Rect(top_left=(jx,my), width=1, height=1), False
                 else:
                     junct = junct.move(direction)
 
@@ -135,7 +142,7 @@ class MazeImage:
         return (math.ceil((x1+x2)/2), math.ceil((y1+y2)/2))
             
     def graph(self, root_junct):
-        self._graph = graph = networkx.Graph()
+        self._graph = graph = nx.Graph()
         graph.add_node(root_junct)
         dummy_junct = Rect(top_left=(root_junct.top_left[0],
                                      root_junct.top_left[1]-30),
@@ -149,11 +156,14 @@ class MazeImage:
             if junct in expanded:
                 continue
             for direction in self._missing_directions(junct):
-                neighbor = self.junct_neighbor(junct,direction)
+                neighbor, is_goal = self.junct_neighbor(junct,direction)
                 if neighbor is not None:
                     graph.add_edge(junct,neighbor)
-                    frontier.append(neighbor)
+                    graph.nodes[neighbor]["is_goal"] = is_goal
+                    if is_goal: expanded.add(neighbor)
+                    else: frontier.append(neighbor)
             expanded.add(junct)
+        graph.remove_node(dummy_junct)
         return graph
 
     def _missing_directions(self,junct):
@@ -207,15 +217,96 @@ def test_neighbors():
     left = maze_img.junct_neighbor(down,Rect.LEFT)
     assert left == Rect((68, 78),1,1)
 
-def draw_graph():
+def big_tunnels_temp():
     maze_img = MazeImage(Image.open("maze1.jpg"))
+    junct = Rect((281,268),1,1)
+    up = maze_img.junct_neighbor(junct, Rect.UP)
+    raise NotImplementedError
+
+def draw_graph(graph, draw,color=get_color("black")):
+    for node in graph.nodes:
+        draw_node(node,draw,color=color)
+    for junct1, junct2 in graph.edges:
+        draw_line(junct1,junct2,draw,color=color)
+
+def draw_node(node, draw, color=get_color("black")):
+    x,y = node.top_left
+    x1,y1 = x-1,y-1
+    x2,y2 = x1+2,y1+2
+    draw.rectangle(((x1,y1),(x2,y2)),fill=color,outline=color)
+
+def draw_line(node1, node2, draw, color=get_color("black")):
+    xy1, xy2 = node1.top_left, node2.top_left
+    draw.line((xy1,xy2),fill=color,width=1)
+    
+def draw_graph_script():
+    img = Image.open("maze1_no_big.jpg")
+    maze_img = MazeImage(img)
     root_junct = Rect((43,53),1,1)
     graph = maze_img.graph(root_junct)
-    for junct1, junct2 in graph.edges:
-        xy1, xy2 = junct1.top_left, junct2.top_left
-        maze_img.draw.line((xy1,xy2),fill=(0,0,0),width=1)
-    maze_img.img.save("maze1_graph.tiff")
-    
+    blank = Image.new("RGB", maze_img.img.size, MazeImage.TUNNEL)
+    draw = ImageDraw.Draw(blank)
+    draw_graph(graph,draw)
+    img.save("draw_graph_result.tiff")    
+    return graph
+
+def draw_path(nodes,draw,color=(0,0,0)):
+    for node in nodes:
+        draw_node(node,draw)
+    iter1, iter2 = iter(nodes), iter(nodes)
+    try: next(iter2)
+    except StopIteration: pass
+    for node1,node2 in zip(iter1,iter2):
+        draw_line(node1, node2, draw, color)
+
+#════════════════════════════════════════
+# search algorithms
+
+def search_bfs(graph, root):
+    """Returns a list of juncts which form the path
+    from the initial state to the goal state"""
+    search_tree = nx.DiGraph()
+    search_tree.add_node(root)
+    frontier = deque([root])
+    explored = set()
+    while frontier:
+        junct = frontier.popleft()
+        search_bfs_before_iteration(search_tree, frontier, explored, junct)
+        if junct in explored:
+            continue
+        for neighbor in graph.neighbors(junct):
+            if neighbor in explored:
+                continue
+            elif graph.nodes[neighbor].get("is_goal"):
+                path = [neighbor]
+                while junct is not None:
+                    path.append(junct)
+                    junct = next(search_tree.predecessors(junct),None)
+                path.reverse()
+                return path, search_tree
+            else:
+                search_tree.add_edge(junct, neighbor)
+                frontier.append(neighbor)
+        explored.add(junct)
+    return None
+
+def search_bfs_before_iteration(search_tree, frontier, explored, current):
+    img = Image.open("maze1_no_big.jpg")
+    draw = ImageDraw.draw(
+    draw_graph(search_tree,
+
+def search_bfs_script0():
+    img = Image.open("maze1_no_big.jpg")
+    maze_img = MazeImage(img)
+    root_junct = Rect((43,53),1,1)
+    graph = maze_img.graph(root_junct)
+    path, search_tree = search_bfs(graph,root_junct)
+    draw = ImageDraw.Draw(img)
+    draw_graph(search_tree,draw,color=get_color("gray"))
+    draw_path(path,draw,color=get_color("black"))
+    img.save("maze1_path.tiff")
+    return graph
+
 #════════════════════════════════════════
 # misc scripts
     
@@ -255,3 +346,15 @@ def script3():
             new_color = min(distances)[1]
             img.putpixel((x,y),new_color)
     img.save("maze1_manhattan.tiff")
+
+def graph_dot(graph):
+    def node_name(node):
+        return str(node.top_left)
+    lines = ["graph {"]
+    for node,attrs in graph.nodes.items():
+        lines.append(f'    "{node_name(node)}";')
+    for (node1,node2),attrs in graph.edges.items():
+        name1, name2 = node_name(node1), node_name(node2)
+        lines.append(f'    "{name1}"--"{name2}";')
+    lines.append("}"); lines.append("")
+    return "\n".join(lines)
