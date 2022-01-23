@@ -167,10 +167,13 @@ class MazeImage:
             junct = frontier.popleft()
             if junct in expanded:
                 continue
+            jx, jy = junct.top_left
             for direction in self._missing_directions(junct):
                 neighbor, is_goal = self.junct_neighbor(junct,direction)
                 if neighbor is not None:
-                    graph.add_edge(junct,neighbor)
+                    nx, ny = neighbor.top_left
+                    cost = abs(jx-nx) + abs(jy-ny)
+                    graph.add_edges_from([(junct,neighbor,{"cost":cost})])
                     graph.nodes[neighbor]["is_goal"] = is_goal
                     if is_goal: expanded.add(neighbor)
                     else: frontier.append(neighbor)
