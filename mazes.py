@@ -2,6 +2,8 @@ import itertools
 import math
 import networkx as nx
 import pdb
+import os
+import shutil
 
 from PIL import Image, ImageDraw, ImageColor
 get_color = ImageColor.getrgb
@@ -89,17 +91,17 @@ class MazeImage:
 
     def junct_neighbor(self, junct, direction):
         junct = junct.move(direction, amount=self.PROBE_LENGTH)
-        if self.in_goal(junct.top_left):
-            return junct, True
-        elif not self.in_tunnel(junct.top_left):
+        if not self.in_tunnel(junct.top_left):
             return None, False
         orientation = (self.VERTICAL if direction in (Rect.LEFT, Rect.RIGHT)
                        else self.HORIZONTAL)
         while True:
             if not self.in_tunnel(junct.top_left):
-                # We've reached a dead end without finding a turn. Move back a
-                # bit and return the dead end junction
-                return junct.move(direction, -3), False
+                goal_junct = self._check_goal(junct.top_left)
+                if goal_junct:
+                    return goal_junct, True
+                else:
+                    return junct.move(direction, -3), False
             else:
                 tunnels = self._probe(junct,orientation)
                 if tunnels != (None, None):
@@ -113,6 +115,16 @@ class MazeImage:
                 else:
                     junct = junct.move(direction)
 
+    def _check_goal(self, xy):
+        directions = (Rect.DOWN, Rect.RIGHT)
+        for direction in directions:
+            point = Rect(xy,1,1)
+            for _ in range(self.PROBE_LENGTH):
+                if self.in_goal(point.top_left):
+                    return point
+                point = point.move(direction)
+        return None
+            
     def _probe(self,junct,orientation):
         """Returns a pair of the pixel coordinates of the tunnels"""
         directions = ((Rect.UP,Rect.DOWN) if orientation == self.VERTICAL
@@ -217,13 +229,10 @@ def test_neighbors():
     left = maze_img.junct_neighbor(down,Rect.LEFT)
     assert left == Rect((68, 78),1,1)
 
-def big_tunnels_temp():
-    maze_img = MazeImage(Image.open("maze1.jpg"))
-    junct = Rect((281,268),1,1)
-    up = maze_img.junct_neighbor(junct, Rect.UP)
-    raise NotImplementedError
+#════════════════════════════════════════
+# drawing
 
-def draw_graph(graph, draw,color=get_color("black")):
+def draw_graph(graph,draw,color=get_color("black")):
     for node in graph.nodes:
         draw_node(node,draw,color=color)
     for junct1, junct2 in graph.edges:
@@ -262,50 +271,95 @@ def draw_path(nodes,draw,color=(0,0,0)):
 #════════════════════════════════════════
 # search algorithms
 
-def search_bfs(graph, root):
-    """Returns a list of juncts which form the path
-    from the initial state to the goal state"""
-    search_tree = nx.DiGraph()
-    search_tree.add_node(root)
-    frontier = deque([root])
-    explored = set()
-    while frontier:
-        junct = frontier.popleft()
-        search_bfs_before_iteration(search_tree, frontier, explored, junct)
-        if junct in explored:
-            continue
-        for neighbor in graph.neighbors(junct):
-            if neighbor in explored:
+class Searcher:
+    def __init__(self,graph,root):
+        self.graph = graph
+        self.root = root
+
+    #════════════════════════════════════════
+    # breadth-first-search
+    
+    def bfs(self):
+        root, graph = self.root, self.graph
+        self.bfs_search_tree = search_tree = nx.DiGraph()
+        search_tree.add_node(root)
+        self.bfs_frontier = frontier = deque([root])
+        self.bfs_explored = explored = set()
+        self.bfs_did_init()
+        while frontier:
+            junct = frontier.popleft()
+            if junct in explored:
                 continue
-            elif graph.nodes[neighbor].get("is_goal"):
-                path = [neighbor]
-                while junct is not None:
-                    path.append(junct)
-                    junct = next(search_tree.predecessors(junct),None)
-                path.reverse()
-                return path, search_tree
-            else:
-                search_tree.add_edge(junct, neighbor)
-                frontier.append(neighbor)
-        explored.add(junct)
-    return None
+            self.bfs_current = junct
+            self.bfs_before_iteration()            
+            for neighbor in graph.neighbors(junct):
+                if neighbor in explored:
+                    continue
+                elif neighbor in search_tree:
+                    # NEIGHBOR is in FRONTIER
+                    continue
+                elif graph.nodes[neighbor].get("is_goal"):
+                    path = [neighbor]
+                    while junct is not None:
+                        path.append(junct)
+                        junct = next(search_tree.predecessors(junct),None)
+                    path.reverse()
+                    self.bfs_end(path)
+                    return path, search_tree
+                else:
+                    search_tree.add_edge(junct, neighbor)
+                    self.bfs_did_extend_search_tree((junct,neighbor))
+                    frontier.append(neighbor)
+            explored.add(junct)
+        self.bfs_end(None)
+        return None, search_tree
 
-def search_bfs_before_iteration(search_tree, frontier, explored, current):
-    img = Image.open("maze1_no_big.jpg")
-    draw = ImageDraw.draw(
-    draw_graph(search_tree,
+    def bfs_did_init(self):
+        self.bfs_DIR = DIR = "maze1_bfs"
+        try:
+            shutil.rmtree(DIR)
+        except FileNotFoundError:
+            pass
+        os.mkdir(DIR)
+        self.bfs_iter_count = 0
+        self.bfs_canvas = Image.open("maze1_no_big.jpg")
+        self.bfs_draw = ImageDraw.Draw(self.bfs_canvas)
 
+    def bfs_before_iteration(self):
+        pass
+
+    def bfs_did_extend_search_tree(self, edge):
+        node1, node2 = edge
+        draw_node(node1, self.bfs_draw)
+        draw_node(node2, self.bfs_draw)
+        draw_line(node1, node2, self.bfs_draw)
+        img_name = self.bfs_next_img_name()
+        self.bfs_canvas.save(os.path.join(self.bfs_DIR, img_name))
+        
+    def bfs_next_img_name(self):
+        img_name = f"{str(self.bfs_iter_count).rjust(6,'0')}.jpg"
+        self.bfs_iter_count += 1
+        return img_name
+        
+    def bfs_end(self, path):
+        if path is not None:
+            draw_graph(self.bfs_search_tree, self.bfs_draw, color=get_color("gray"))
+            draw_path(path, self.bfs_draw)
+            img_name = self.bfs_next_img_name()
+            self.bfs_canvas.save(os.path.join(self.bfs_DIR, img_name))
+    
 def search_bfs_script0():
     img = Image.open("maze1_no_big.jpg")
     maze_img = MazeImage(img)
     root_junct = Rect((43,53),1,1)
     graph = maze_img.graph(root_junct)
-    path, search_tree = search_bfs(graph,root_junct)
-    draw = ImageDraw.Draw(img)
-    draw_graph(search_tree,draw,color=get_color("gray"))
-    draw_path(path,draw,color=get_color("black"))
-    img.save("maze1_path.tiff")
-    return graph
+    searcher = Searcher(graph, root_junct)
+    path, search_tree = searcher.bfs()
+    # draw = ImageDraw.Draw(img)
+    # draw_graph(search_tree,draw,color=get_color("gray"))
+    # draw_path(path,draw,color=get_color("black"))
+    # img.save("maze1_path.tiff")
+    # return graph
 
 #════════════════════════════════════════
 # misc scripts
