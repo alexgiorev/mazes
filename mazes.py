@@ -57,6 +57,17 @@ class Rect:
         (tx,ty),(bx,by) = (self.top_left, self.bottom_right)
         return (tx+bx)//2, (ty+by)//2
 
+    @property
+    def xs(self):
+        x = self.top_left[0]
+        return range(x, x+self.width)
+
+    @property
+    def ys(self):
+        y = self.top_left[1]
+        return range(y, y+self.height)
+
+    
 class MazeImage:
     TUNNEL = (255,255,255)
     WALL = (136,170,136)
@@ -66,11 +77,12 @@ class MazeImage:
     COLORS = (TUNNEL, WALL, CIRCLE_BORDER, CIRCLE_INTERNALS)
     VERTICAL = True
     HORIZONTAL = False
+    PROBE_LENGTH = 10
+    TUNNEL_SIZE = 7
     
     def __init__(self,img):
         self.img = img
         self.draw = ImageDraw.Draw(img)
-        self.PROBE_LENGTH = 10
     
     def in_tunnel(self,xy):
         return self.closest_color(xy) == self.TUNNEL
@@ -152,35 +164,192 @@ class MazeImage:
             end_points.append(point.top_left)
         (x1,y1),(x2,y2) = end_points
         return (math.ceil((x1+x2)/2), math.ceil((y1+y2)/2))
-            
-    def graph(self, root_junct):
+
+    def fill_big_tunnels(self):
+        maze_rect = self.maze_rect
+        tunnel_size = self.TUNNEL_SIZE
+        for y in maze_rect.ys:
+            for x in maze_rect.xs:
+                if self._on_top_left_of_big_tunnel(x,y):
+                    width, height = self._big_tunnel_dimensions(x,y)
+                    fill_rect = Rect((x+tunnel_size, y+tunnel_size),
+                                     width-2*tunnel_size,
+                                     height-2*tunnel_size)
+                    self.draw.rectangle((fill_rect.top_left,
+                                         fill_rect.bottom_right),
+                                        fill=self.WALL)
+
+    def _on_top_left_of_big_tunnel(self, x,y):
+        try:
+            for d in range(1,2*self.TUNNEL_SIZE+1):
+                to_check = [(x+d,y+d),(x+d,y),(x,y+d)]
+                if not all(map(self.in_tunnel, to_check)):
+                    return False
+        except IndexError:
+            return False
+        return True
+
+    def _big_tunnel_dimensions(self, x,y):                        
+        height, width = 2*self.TUNNEL_SIZE, 2*self.TUNNEL_SIZE
+        # compute the height
+        try:
+            for height in range(height+1, self.img.height):
+                y0 = y+height
+                for x0 in range(x,x+width):
+                    if not self.in_tunnel((x0,y0)):
+                        raise StopIteration
+        except StopIteration: pass
+        # compute the width
+        try:
+            for width in range(width+1,self.img.width):
+                x0 = x+width
+                # start with (y+1) so that bumps don't deceive us into ending the loop prematurely
+                for y0 in range(y+1,y+height):
+                    if not self.in_tunnel((x0,y0)):
+                        raise StopIteration
+        except StopIteration: pass
+        return width, height
+
+    @property
+    def maze_top_left(self):
+        if hasattr(self,"_maze_rect"):
+            return self._maze_rect.top_left
+        else:
+            for y in range(30):
+                for x in range(30):
+                    if not self.in_tunnel((x,y)):
+                        return ((x,y))
+        
+    
+    @property
+    def maze_rect(self):
+        if hasattr(self, "_maze_rect"):
+            return self._maze_rect
+        else:
+            img_width, img_height = self.img.size
+            top_left = self.maze_top_left
+            bottom_y = None
+            try:
+                for y in range(img_height-1,img_height-31,-1):
+                    for x in range(30):
+                        if not self.in_tunnel((x,y)):
+                            bottom_y = y
+                            raise StopIteration
+            except StopIteration: pass
+            right_x = None
+            try:
+                for y in range(30):
+                    for x in range(img_width-1,img_width-31,-1):
+                        if not self.in_tunnel((x,y)):
+                            right_x = x
+                            raise StopIteration
+            except StopIteration: pass
+            width = right_x - top_left[0] + 1
+            height = bottom_y - top_left[1] + 1
+            self._maze_rect = Rect(top_left,width,height)
+            return self._maze_rect
+
+    def graph(self):
+        root_juncts = self.root_juncts
         self._graph = graph = nx.Graph()
-        graph.add_node(root_junct)
-        dummy_junct = Rect(top_left=(root_junct.top_left[0],
-                                     root_junct.top_left[1]-30),
-                           width=1, height=1)
-        graph.add_edge(root_junct,dummy_junct)
+        graph.add_nodes_from(root_juncts)
         #════════════════════
-        frontier = deque([root_junct])
+        frontier = deque(root_juncts)
         expanded = set()
         while frontier:
             junct = frontier.popleft()
             if junct in expanded:
                 continue
-            jx, jy = junct.top_left
+            junct_x, junct_y = junct.top_left
             for direction in self._missing_directions(junct):
                 neighbor, is_goal = self.junct_neighbor(junct,direction)
                 if neighbor is not None:
-                    nx, ny = neighbor.top_left
-                    cost = abs(jx-nx) + abs(jy-ny)
+                    neigh_x, neigh_y = neighbor.top_left
+                    cost = abs(junct_x-neigh_x)+abs(junct_y-neigh_y)
                     graph.add_edges_from([(junct,neighbor,{"cost":cost})])
                     graph.nodes[neighbor]["is_goal"] = is_goal
                     if is_goal: expanded.add(neighbor)
                     else: frontier.append(neighbor)
             expanded.add(junct)
-        graph.remove_node(dummy_junct)
+        graph.graph["image"] = self.img
         return graph
 
+    @property
+    def root_juncts(self):
+        try:
+            return self._root_juncts
+        except AttributeError:
+            pass
+        root_juncts = []
+        circle_rect = self._circle_rect()
+        mx,my = circle_rect.midpoint
+        bx,by = circle_rect.bottom_right
+        if not self.closest_color((bx+1,my)) == self.WALL:
+            x0 = bx+2
+            while not self.in_tunnel((x0,my)):
+                x0 += 1
+            root_juncts.append(Rect((x0,my),1,1))
+        if not self.closest_color((mx,by+1)) == self.WALL:
+            y0 = by+2
+            while not self.in_tunnel((mx,y0)):
+                y0 += 1
+            root_juncts.append(Rect((mx,y0),1,1))
+        self._root_juncts = root_juncts
+        return root_juncts
+
+    def _circle_rect(self):
+        # find the first tunnel
+        x,y = self.maze_top_left
+        x0,y0 = self._next_color_change((x,y),Rect.RIGHT)
+        x1,y1 = self._next_color_change((x0,y0),Rect.RIGHT)
+        x0 += (x1-x0)//2 # move to the middle of the tunnel
+        # pdb.set_trace()
+        # move down to the top border of the circle
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self._next_color_change((x0,y0),(0,1))
+        top_y = y0
+        # pdb.set_trace()
+        # move down to the bottom border of the circle
+        x0,y0 = self._next_color_change((x0,y0),(0,1))
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self._next_color_change((x0,y0),(0,1))
+        x0,y0 = self._next_color_change((x0,y0),(0,1))
+        bottom_y = y0-1
+        # pdb.set_trace()
+        # go back to the center
+        center = x0,math.ceil((top_y+bottom_y)/2)
+        x0,y0 = center
+        # pdb.set_trace()
+        # go to the left border
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self._next_color_change((x0,y0),(-1,0))
+        x0,y0 = self._next_color_change((x0,y0),(-1,0))
+        left_x = x0+1
+        # pdb.set_trace()
+        # go to the right border
+        x0,y0 = center
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self._next_color_change((x0,y0),(1,0))
+        x0,y0 = self._next_color_change((x0,y0),(1,0))
+        right_x = x0-1
+        # pdb.set_trace()
+        return Rect((left_x,top_y),
+                    right_x-left_x+1,
+                    bottom_y-top_y+1)
+
+    def _next_color_change(self, xy, direction):
+        x,y = xy
+        dx,dy = direction
+        color = self.closest_color(xy)
+        while True:
+            x+=dx; y+=dy
+            try:
+                new_color = self.closest_color((x,y))
+            except IndexError:
+                return None
+            if new_color != color:
+                return x,y
+    
     def _missing_directions(self,junct):
         existing_directions = set()
         jx,jy = junct.top_left
@@ -194,12 +363,6 @@ class MazeImage:
                 direction = Rect.LEFT if jx > nx else Rect.RIGHT
             existing_directions.add(direction)
         return {Rect.UP,Rect.DOWN,Rect.LEFT,Rect.RIGHT}-existing_directions
-
-    def mark_junct(self,junct):
-        draw = ImageDraw.Draw(self.img)
-        draw.rectangle((junct.top_left,junct.bottom_right),
-                       outline=(157,11,11),
-                       fill=(157,11,11))
 
 #════════════════════════════════════════
 # testing
@@ -252,12 +415,10 @@ def draw_line(node1, node2, draw, color=get_color("black")):
     draw.line((xy1,xy2),fill=color,width=1)
     
 def draw_graph_script():
-    img = Image.open("maze1_no_big.jpg")
-    maze_img = MazeImage(img)
-    root_junct = Rect((43,53),1,1)
-    graph = maze_img.graph(root_junct)
-    blank = Image.new("RGB", maze_img.img.size, MazeImage.TUNNEL)
-    draw = ImageDraw.Draw(blank)
+    img = Image.open("images/maze1_no_big.tiff")
+    maze_img = MazeImage(img.copy())
+    graph = maze_img.graph()
+    draw = ImageDraw.Draw(img)
     draw_graph(graph,draw)
     img.save("draw_graph_result.tiff")    
     return graph
@@ -284,17 +445,17 @@ class Searcher:
     
     def bfs(self):
         root, graph = self.root, self.graph
-        self.bfs_search_tree = search_tree = nx.DiGraph()
+        self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_node(root)
-        self.bfs_frontier = frontier = deque([root])
-        self.bfs_explored = explored = set()
-        self.bfs_did_init()
+        self.frontier = frontier = deque([root])
+        self.explored = explored = set()
+        self.did_init()
         while frontier:
             junct = frontier.popleft()
             if junct in explored:
                 continue
-            self.bfs_current = junct
-            self.bfs_before_iteration()            
+            self.current = junct
+            self.before_iteration()            
             for neighbor in graph.neighbors(junct):
                 if neighbor in explored:
                     continue
@@ -307,55 +468,63 @@ class Searcher:
                         path.append(junct)
                         junct = next(search_tree.predecessors(junct),None)
                     path.reverse()
-                    self.bfs_end(path)
+                    self.end(path)
                     return path, search_tree
                 else:
                     search_tree.add_edge(junct, neighbor)
-                    self.bfs_did_extend_search_tree((junct,neighbor))
+                    self.did_extend_search_tree((junct,neighbor))
                     frontier.append(neighbor)
             explored.add(junct)
-        self.bfs_end(None)
+        self.end(None)
         return None, search_tree
 
-    def bfs_did_init(self):
-        self.bfs_DIR = DIR = "maze1_bfs"
+    #════════════════════════════════════════
+    # hooks
+    
+    def did_init(self):
+        self.DIR = DIR = "searcher"
         try:
             shutil.rmtree(DIR)
         except FileNotFoundError:
             pass
         os.mkdir(DIR)
-        self.bfs_iter_count = 0
-        self.bfs_canvas = Image.open("maze1_no_big.jpg")
-        self.bfs_draw = ImageDraw.Draw(self.bfs_canvas)
+        self.iter_count = 0
+        self.canvas = self.graph["image"].copy()
+        self.draw = ImageDraw.Draw(self.canvas)
 
-    def bfs_before_iteration(self):
+    def before_iteration(self):
         pass
 
-    def bfs_did_extend_search_tree(self, edge):
+    def did_extend_search_tree(self, edge):
         node1, node2 = edge
-        draw_node(node1, self.bfs_draw)
-        draw_node(node2, self.bfs_draw)
-        draw_line(node1, node2, self.bfs_draw)
-        img_name = self.bfs_next_img_name()
-        self.bfs_canvas.save(os.path.join(self.bfs_DIR, img_name))
+        draw_node(node1, self.draw)
+        draw_node(node2, self.draw)
+        draw_line(node1, node2, self.draw)
+        img_name = self._next_img_name()
+        self.canvas.save(os.path.join(self.DIR, img_name))
         
-    def bfs_next_img_name(self):
-        img_name = f"{str(self.bfs_iter_count).rjust(6,'0')}.jpg"
-        self.bfs_iter_count += 1
+    def _next_img_name(self):
+        img_name = f"{str(self.iter_count).rjust(6,'0')}.jpg"
+        self.iter_count += 1
         return img_name
         
-    def bfs_end(self, path):
+    def end(self, path):
         if path is not None:
-            draw_graph(self.bfs_search_tree, self.bfs_draw, color=get_color("gray"))
-            draw_path(path, self.bfs_draw)
-            img_name = self.bfs_next_img_name()
-            self.bfs_canvas.save(os.path.join(self.bfs_DIR, img_name))
+            draw_graph(self.search_tree, self.draw, color=get_color("gray"))
+            draw_path(path, self.draw)
+            img_name = self.next_img_name()
+            self.canvas.save(os.path.join(self.DIR, img_name))
+
+    #════════════════════════════════════════
+    # best_first_search
+    
+    def best_first_search(graph,root):
+        raise NotImplementedError
     
 def search_bfs_script0():
-    img = Image.open("maze1_no_big.jpg")
+    img = Image.open("images/maze3_manhattan_no_big.tiff")
     maze_img = MazeImage(img)
-    root_junct = Rect((43,53),1,1)
-    graph = maze_img.graph(root_junct)
+    graph = maze_img.graph()
     searcher = Searcher(graph, root_junct)
     path, search_tree = searcher.bfs()
     # draw = ImageDraw.Draw(img)
@@ -394,15 +563,16 @@ def manhattan_length(color1,color2):
             abs(color1[1]-color2[1]) +
             abs(color1[2]-color2[2]))
     
-def script3():
-    img = Image.open("maze1.jpg")
+def script_manhattan(fullname):
+    name,ext = os.path.splitext(fullname)
+    img = Image.open(f"images/{fullname}")
     for x,y in itertools.product(range(img.width),range(img.height)):
         color = img.getpixel((x,y))
         if color not in MazeImage.COLORS:            
             distances = [(manhattan_length(COLOR,color),COLOR) for COLOR in MazeImage.COLORS]
             new_color = min(distances)[1]
             img.putpixel((x,y),new_color)
-    img.save("maze1_manhattan.tiff")
+    img.save(f"images/{name}_manhattan.tiff")
 
 def graph_dot(graph):
     def node_name(node):
@@ -415,3 +585,16 @@ def graph_dot(graph):
         lines.append(f'    "{name1}"--"{name2}";')
     lines.append("}"); lines.append("")
     return "\n".join(lines)
+
+def remove_big_tunnels(fullname):
+    name, ext = os.path.splitext(fullname)
+    maze_img = MazeImage(Image.open(f"images/{fullname}"))
+    maze_img.fill_big_tunnels()
+    maze_img.img.save(f"images/{name}_no_big.tiff")
+
+def scratch():
+    maze_img = MazeImage(Image.open("images/maze3_manhattan.tiff"))
+    graph = maze_img.graph()
+    
+    print(maze_img._circle_rect())
+    print(maze_img._root_juncts())
