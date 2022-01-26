@@ -14,6 +14,7 @@ class Rect:
     RIGHT = (1,0)
     UP = (0,-1)
     DOWN = (0,1)
+    DIRECTIONS = (LEFT,RIGHT,UP,DOWN)
     
     def __init__(self, top_left,width,height):
         self.top_left = top_left
@@ -86,7 +87,8 @@ class MazeImage:
     
     def in_tunnel(self,xy):
         return self.closest_color(xy) == self.TUNNEL
-
+    def in_wall(self,xy):
+        return self.closest_color(xy) == self.WALL
     def in_goal(self,xy):
         return self.closest_color(xy) == self.GOAL
     
@@ -165,6 +167,8 @@ class MazeImage:
         (x1,y1),(x2,y2) = end_points
         return (math.ceil((x1+x2)/2), math.ceil((y1+y2)/2))
 
+    #════════════════════════════════════════
+    
     def fill_big_tunnels(self):
         maze_rect = self.maze_rect
         tunnel_size = self.TUNNEL_SIZE
@@ -210,6 +214,72 @@ class MazeImage:
         except StopIteration: pass
         return width, height
 
+    #════════════════════════════════════════
+    def remove_bumps(self):
+        xys = itertools.product(range(self.img.width),range(self.img.height))
+        bumps = deque()
+        corners = set()
+        for xy in xys:
+            status = self._bump_status(xy)
+            if status in ("fake_corner", "alone"):
+                bumps.append(xy)
+            elif status == "corner":
+                corners.add(xy)
+        img = self.img
+        while bumps:
+            xy = bumps.popleft()
+            # bump status could have changed since it was added to the queue
+            if self._bump_status(xy) is None:
+                continue
+            img.putpixel(xy, self.TUNNEL)
+            for xy0 in self.neighbor_xys(xy,"straight"):
+                status = self._bump_status(xy0)
+                if status in ("fake_corner", "alone"):
+                    bumps.append(xy0)
+                elif status == "corner":
+                    corners.add(xy0)
+        for corner in corners:
+            img.putpixel(corner, self.TUNNEL)
+
+    def _bump_status(self, xy):
+        if not self.in_wall(xy):
+            return None
+        straight = sum(1 for color in self.neighbor_pixels(xy, "straight")
+                       if color == self.TUNNEL)
+        if straight > 2:
+            return "alone"
+        elif straight < 2:
+            return None
+        diagonal = sum(1 for color in self.neighbor_pixels(xy, "diagonal")
+                       if color == self.TUNNEL)
+        if diagonal > 2:
+            return None
+        elif diagonal == 2:
+            return "fake_corner"
+        else:
+            return "corner"
+                
+    def neighbor_pixels(self, xy, directions=None):
+        for xy0 in self.neighbor_xys(xy,directions):
+            yield self.closest_color(xy0)
+
+    def neighbor_xys(self, xy, directions=None):
+        if directions is None:
+            directions = ((1,0),(-1,0),(0,1),(0,-1),
+                          (1,1),(1,-1),(-1,1),(-1,-1))
+        elif directions == "straight":
+            directions = ((1,0),(-1,0),(0,1),(0,-1))
+        elif directions == "diagonal":
+            directions = ((1,1),(1,-1),(-1,1),(-1,-1))
+        else: # directions is an iterable
+            pass
+        x,y = xy
+        for dx,dy in directions:
+            x0,y0 = x+dx,y+dy
+            if 0 <= x0 < self.img.width and 0 <= y0 < self.img.height:
+                yield x0,y0
+
+    #════════════════════════════════════════
     @property
     def maze_top_left(self):
         if hasattr(self,"_maze_rect"):
@@ -249,7 +319,13 @@ class MazeImage:
             self._maze_rect = Rect(top_left,width,height)
             return self._maze_rect
 
-    def graph(self):
+    def graph(self, trace=False):
+        if trace:
+            trace_img = self.img.copy()
+            trace_draw = ImageDraw.Draw(trace_img)
+            trace_index = 0
+            trace_images = []
+            trace_dir = "graph_trace"
         root_juncts = self.root_juncts
         self._graph = graph = nx.Graph()
         graph.add_nodes_from(root_juncts)
@@ -267,11 +343,25 @@ class MazeImage:
                     neigh_x, neigh_y = neighbor.top_left
                     cost = abs(junct_x-neigh_x)+abs(junct_y-neigh_y)
                     graph.add_edges_from([(junct,neighbor,{"cost":cost})])
+                    # print(f"### {junct.top_left}--{neighbor.top_left}")                    
+                    if trace:
+                        draw_edge(junct, neighbor, trace_draw)
+                        trace_copy = trace_img.copy()
+                        trace_copy.info["name"] = str(trace_index).rjust(6,"0")+".tiff"
+                        trace_index += 1
+                        trace_images.append(trace_copy)
                     graph.nodes[neighbor]["is_goal"] = is_goal
                     if is_goal: expanded.add(neighbor)
                     else: frontier.append(neighbor)
             expanded.add(junct)
         graph.graph["image"] = self.img
+        graph.graph["roots"] = root_juncts
+        if trace:
+            try: shutil.rmtree(trace_dir)
+            except FileNotFoundError: pass
+            os.mkdir(trace_dir)
+            for image in trace_images:
+                image.save(os.path.join(trace_dir,image.info["name"]))
         return graph
 
     @property
@@ -303,36 +393,30 @@ class MazeImage:
         x0,y0 = self._next_color_change((x,y),Rect.RIGHT)
         x1,y1 = self._next_color_change((x0,y0),Rect.RIGHT)
         x0 += (x1-x0)//2 # move to the middle of the tunnel
-        # pdb.set_trace()
         # move down to the top border of the circle
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
             x0,y0 = self._next_color_change((x0,y0),(0,1))
         top_y = y0
-        # pdb.set_trace()
         # move down to the bottom border of the circle
         x0,y0 = self._next_color_change((x0,y0),(0,1))
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
             x0,y0 = self._next_color_change((x0,y0),(0,1))
         x0,y0 = self._next_color_change((x0,y0),(0,1))
         bottom_y = y0-1
-        # pdb.set_trace()
         # go back to the center
         center = x0,math.ceil((top_y+bottom_y)/2)
         x0,y0 = center
-        # pdb.set_trace()
         # go to the left border
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
             x0,y0 = self._next_color_change((x0,y0),(-1,0))
         x0,y0 = self._next_color_change((x0,y0),(-1,0))
         left_x = x0+1
-        # pdb.set_trace()
         # go to the right border
         x0,y0 = center
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
             x0,y0 = self._next_color_change((x0,y0),(1,0))
         x0,y0 = self._next_color_change((x0,y0),(1,0))
         right_x = x0-1
-        # pdb.set_trace()
         return Rect((left_x,top_y),
                     right_x-left_x+1,
                     bottom_y-top_y+1)
@@ -363,6 +447,91 @@ class MazeImage:
                 direction = Rect.LEFT if jx > nx else Rect.RIGHT
             existing_directions.add(direction)
         return {Rect.UP,Rect.DOWN,Rect.LEFT,Rect.RIGHT}-existing_directions
+
+class Searcher:
+    def __init__(self,graph,roots=None):
+        self.graph = graph
+        self.roots = roots or graph.graph["roots"]
+
+    #════════════════════════════════════════
+    # breadth-first-search
+    
+    def bfs(self):
+        roots, graph = self.roots, self.graph
+        self.search_tree = search_tree = nx.DiGraph()
+        search_tree.add_nodes_from(roots)
+        self.frontier = frontier = deque(roots)
+        self.explored = explored = set()
+        self.did_init()
+        while frontier:
+            junct = frontier.popleft()
+            if junct in explored:
+                continue
+            self.current = junct
+            self.before_expansion()            
+            for neighbor in graph.neighbors(junct):
+                if neighbor in explored:
+                    continue
+                elif neighbor in search_tree:
+                    # NEIGHBOR is in FRONTIER
+                    continue
+                elif graph.nodes[neighbor].get("is_goal"):
+                    path = [neighbor]
+                    while junct is not None:
+                        path.append(junct)
+                        junct = next(search_tree.predecessors(junct),None)
+                    path.reverse()
+                    self.end(path)
+                    return path, search_tree
+                else:
+                    search_tree.add_edge(junct, neighbor)
+                    self.did_extend_search_tree((junct,neighbor))
+                    frontier.append(neighbor)
+            explored.add(junct)
+        self.end(None)
+        return None, search_tree
+
+    #════════════════════════════════════════
+    # hooks
+    
+    def did_init(self):
+        self.DIR = DIR = "search_result"
+        try:
+            shutil.rmtree(DIR)
+        except FileNotFoundError:
+            pass
+        os.mkdir(DIR)
+        self.iter_count = 0
+        self.canvas = self.graph.graph["image"].copy()
+        self.draw = ImageDraw.Draw(self.canvas)
+
+    def before_expansion(self):
+        pass
+
+    def did_extend_search_tree(self, edge):
+        node1, node2 = edge
+        print(f"### {node1}--{node2}")
+        draw_edge(node1, node2, self.draw)
+        img_name = self._next_img_name()
+        self.canvas.save(os.path.join(self.DIR, img_name),quality=100)
+        
+    def _next_img_name(self):
+        img_name = f"{str(self.iter_count).rjust(6,'0')}.jpg"
+        self.iter_count += 1
+        return img_name
+        
+    def end(self, path):
+        if path is not None:
+            draw_graph(self.search_tree, self.draw, color=get_color("gray"))
+            draw_path(path, self.draw)
+            img_name = self.next_img_name()
+            self.canvas.save(os.path.join(self.DIR, img_name))
+
+    #════════════════════════════════════════
+    # best_first_search
+    
+    def best_first_search(graph,root):
+        raise NotImplementedError
 
 #════════════════════════════════════════
 # testing
@@ -402,7 +571,7 @@ def draw_graph(graph,draw,color=get_color("black")):
     for node in graph.nodes:
         draw_node(node,draw,color=color)
     for junct1, junct2 in graph.edges:
-        draw_line(junct1,junct2,draw,color=color)
+        draw_edge(junct1,junct2,draw,color=color)
 
 def draw_node(node, draw, color=get_color("black")):
     x,y = node.top_left
@@ -410,7 +579,8 @@ def draw_node(node, draw, color=get_color("black")):
     x2,y2 = x1+2,y1+2
     draw.rectangle(((x1,y1),(x2,y2)),fill=color,outline=color)
 
-def draw_line(node1, node2, draw, color=get_color("black")):
+def draw_edge(node1, node2, draw, color=get_color("black")):
+    draw_node(node1, draw); draw_node(node2, draw)
     xy1, xy2 = node1.top_left, node2.top_left
     draw.line((xy1,xy2),fill=color,width=1)
     
@@ -424,108 +594,17 @@ def draw_graph_script():
     return graph
 
 def draw_path(nodes,draw,color=(0,0,0)):
-    for node in nodes:
-        draw_node(node,draw)
     iter1, iter2 = iter(nodes), iter(nodes)
     try: next(iter2)
     except StopIteration: pass
     for node1,node2 in zip(iter1,iter2):
-        draw_line(node1, node2, draw, color)
-
-#════════════════════════════════════════
-# search algorithms
-
-class Searcher:
-    def __init__(self,graph,root):
-        self.graph = graph
-        self.root = root
-
-    #════════════════════════════════════════
-    # breadth-first-search
-    
-    def bfs(self):
-        root, graph = self.root, self.graph
-        self.search_tree = search_tree = nx.DiGraph()
-        search_tree.add_node(root)
-        self.frontier = frontier = deque([root])
-        self.explored = explored = set()
-        self.did_init()
-        while frontier:
-            junct = frontier.popleft()
-            if junct in explored:
-                continue
-            self.current = junct
-            self.before_iteration()            
-            for neighbor in graph.neighbors(junct):
-                if neighbor in explored:
-                    continue
-                elif neighbor in search_tree:
-                    # NEIGHBOR is in FRONTIER
-                    continue
-                elif graph.nodes[neighbor].get("is_goal"):
-                    path = [neighbor]
-                    while junct is not None:
-                        path.append(junct)
-                        junct = next(search_tree.predecessors(junct),None)
-                    path.reverse()
-                    self.end(path)
-                    return path, search_tree
-                else:
-                    search_tree.add_edge(junct, neighbor)
-                    self.did_extend_search_tree((junct,neighbor))
-                    frontier.append(neighbor)
-            explored.add(junct)
-        self.end(None)
-        return None, search_tree
-
-    #════════════════════════════════════════
-    # hooks
-    
-    def did_init(self):
-        self.DIR = DIR = "searcher"
-        try:
-            shutil.rmtree(DIR)
-        except FileNotFoundError:
-            pass
-        os.mkdir(DIR)
-        self.iter_count = 0
-        self.canvas = self.graph["image"].copy()
-        self.draw = ImageDraw.Draw(self.canvas)
-
-    def before_iteration(self):
-        pass
-
-    def did_extend_search_tree(self, edge):
-        node1, node2 = edge
-        draw_node(node1, self.draw)
-        draw_node(node2, self.draw)
-        draw_line(node1, node2, self.draw)
-        img_name = self._next_img_name()
-        self.canvas.save(os.path.join(self.DIR, img_name))
-        
-    def _next_img_name(self):
-        img_name = f"{str(self.iter_count).rjust(6,'0')}.jpg"
-        self.iter_count += 1
-        return img_name
-        
-    def end(self, path):
-        if path is not None:
-            draw_graph(self.search_tree, self.draw, color=get_color("gray"))
-            draw_path(path, self.draw)
-            img_name = self.next_img_name()
-            self.canvas.save(os.path.join(self.DIR, img_name))
-
-    #════════════════════════════════════════
-    # best_first_search
-    
-    def best_first_search(graph,root):
-        raise NotImplementedError
+        draw_edge(node1, node2, draw, color)
     
 def search_bfs_script0():
     img = Image.open("images/maze3_manhattan_no_big.tiff")
     maze_img = MazeImage(img)
-    graph = maze_img.graph()
-    searcher = Searcher(graph, root_junct)
+    graph = maze_img.graph(trace=True)
+    searcher = Searcher(graph)
     path, search_tree = searcher.bfs()
     # draw = ImageDraw.Draw(img)
     # draw_graph(search_tree,draw,color=get_color("gray"))
@@ -593,8 +672,9 @@ def remove_big_tunnels(fullname):
     maze_img.img.save(f"images/{name}_no_big.tiff")
 
 def scratch():
-    maze_img = MazeImage(Image.open("images/maze3_manhattan.tiff"))
-    graph = maze_img.graph()
-    
-    print(maze_img._circle_rect())
-    print(maze_img._root_juncts())
+    maze = MazeImage(Image.open("images/maze3_no_circle.tiff"))
+    maze.remove_bumps()
+    maze.img.save("images/maze3_no_bumps.tiff")
+    graph = maze.graph()    
+    print(maze._circle_rect())
+    print(maze._root_juncts())
