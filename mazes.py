@@ -59,6 +59,19 @@ class Rect:
         return (tx+bx)//2, (ty+by)//2
 
     @property
+    def lx(self):
+        return self.top_left[0]
+    @property
+    def rx(self):
+        return self.top_left[0]+self.width-1
+    @property
+    def uy(self):
+        return self.top_left[1]
+    @property
+    def dy(self):
+        return self.top_left[1]+self.height-1
+    
+    @property
     def xs(self):
         x = self.top_left[0]
         return range(x, x+self.width)
@@ -73,6 +86,11 @@ class Rect:
         for y in self.ys:
             for x in self.xs:
                 yield (x,y)
+
+    def __contains__(self,xy):
+        lx,uy = self.top_left
+        rx,dy = self.bottom_right
+        return (lx <= xy[0] <= rx) and (uy <= xy[1] <= dy)
 
 class MazeImage:
     TUNNEL = (255,255,255)
@@ -140,6 +158,7 @@ class MazeImage:
             try:
                 new_color = self.closest_color((x,y))
             except IndexError:
+                print("### next_color_change: IndexError")
                 return None
             if new_color != color:
                 return x,y
@@ -148,8 +167,47 @@ class MazeImage:
         self.draw.rectangle((rect.top_left,rect.bottom_right),
                             fill=color,
                             outline=color)
-            
+
+    @property
+    def maze_top_left(self):
+        if hasattr(self,"_maze_rect"):
+            return self._maze_rect.top_left
+        else:
+            for y in range(30):
+                for x in range(30):
+                    if self.in_wall((x,y)):
+                        return (x,y)
+        
+    @property
+    def maze_rect(self):
+        if hasattr(self, "_maze_rect"):
+            return self._maze_rect
+        else:
+            img_width, img_height = self.img.size
+            top_left = self.maze_top_left
+            bottom_y = None
+            try:
+                for y in range(img_height-1,img_height-31,-1):
+                    for x in range(30):
+                        if not self.in_tunnel((x,y)):
+                            bottom_y = y
+                            raise StopIteration
+            except StopIteration: pass
+            right_x = None
+            try:
+                for y in range(30):
+                    for x in range(img_width-1,img_width-31,-1):
+                        if not self.in_tunnel((x,y)):
+                            right_x = x
+                            raise StopIteration
+            except StopIteration: pass
+            width = right_x - top_left[0] + 1
+            height = bottom_y - top_left[1] + 1
+            self._maze_rect = Rect(top_left,width,height)
+            return self._maze_rect
+
     #════════════════════════════════════════
+    
     def junct_neighbor(self, junct, direction):
         junct = junct.move(direction, amount=self.PROBE_LENGTH)
         if not self.in_tunnel(junct.top_left):
@@ -213,8 +271,9 @@ class MazeImage:
             end_points.append(point.top_left)
         (x1,y1),(x2,y2) = end_points
         return (math.ceil((x1+x2)/2), math.ceil((y1+y2)/2))
-
+    
     #════════════════════════════════════════
+    # fill_big_tunnels
     
     def fill_big_tunnels(self):
         maze_rect = self.maze_rect
@@ -260,8 +319,9 @@ class MazeImage:
                         raise StopIteration
         except StopIteration: pass
         return width, height
-
+    
     #════════════════════════════════════════
+    # fix_tunnels
     
     def fix_tunnels(self):
         horizontal_xys = set()
@@ -349,45 +409,115 @@ class MazeImage:
         return rect
 
     #════════════════════════════════════════
-    @property
-    def maze_top_left(self):
-        if hasattr(self,"_maze_rect"):
-            return self._maze_rect.top_left
-        else:
-            for y in range(30):
-                for x in range(30):
-                    if not self.in_tunnel((x,y)):
-                        return ((x,y))
-        
+    # remove circle
     
-    @property
-    def maze_rect(self):
-        if hasattr(self, "_maze_rect"):
-            return self._maze_rect
-        else:
-            img_width, img_height = self.img.size
-            top_left = self.maze_top_left
-            bottom_y = None
-            try:
-                for y in range(img_height-1,img_height-31,-1):
-                    for x in range(30):
-                        if not self.in_tunnel((x,y)):
-                            bottom_y = y
-                            raise StopIteration
-            except StopIteration: pass
-            right_x = None
-            try:
-                for y in range(30):
-                    for x in range(img_width-1,img_width-31,-1):
-                        if not self.in_tunnel((x,y)):
-                            right_x = x
-                            raise StopIteration
-            except StopIteration: pass
-            width = right_x - top_left[0] + 1
-            height = bottom_y - top_left[1] + 1
-            self._maze_rect = Rect(top_left,width,height)
-            return self._maze_rect
-
+    def remove_circle(self):
+        # utility functions
+        #════════════════════
+        def has_yellow(rect):
+            for xy in rect.xys:
+                if self.closest_color(xy) == self.CIRCLE_INTERNALS:
+                    return True
+            return False
+        def top_strip():
+            point = mx,ty-3
+            lx,ly = self.next_color_change(point, Rect.LEFT)
+            rx,ry = self.next_color_change(point, Rect.RIGHT)
+            width = rx-lx-1
+            x = lx+1; y = self.maze_rect.top_left[1]
+            return Rect((x,y),width,1)
+        def right_strip():
+            point = bx+3,my
+            if self.in_wall(point):
+                return None
+            ux,uy = self.next_color_change(point, Rect.UP)
+            dx,dy = self.next_color_change(point, Rect.DOWN)
+            rect = Rect((ux,uy+1),width=1,height=dy-uy-1)
+            while has_yellow(rect):
+                rect = rect.move(Rect.RIGHT)
+            return rect
+        def bottom_strip():
+            point = mx,by+3
+            if self.in_wall(point):
+                return None
+            lx,ly = self.next_color_change(point, Rect.LEFT)
+            rx,ry = self.next_color_change(point, Rect.RIGHT)
+            rect = Rect((lx+1,ly),width=rx-lx-1,height=1)
+            while has_yellow(rect):
+                rect = rect.move(Rect.DOWN)
+            return rect
+        # remove the circle
+        #════════════════════
+        circle_rect = self._circle_rect()
+        tx,ty = circle_rect.top_left
+        mx,my = circle_rect.midpoint
+        bx,by = circle_rect.bottom_right
+        top = top_strip()
+        bottom = bottom_strip()
+        right = right_strip()
+        rects = []
+        if bottom:
+            rects.append(Rect(top.top_left,
+                              width=top.width,
+                              height=bottom.dy-top.uy+1))
+        if right:
+            rects.append(Rect((top.lx,right.uy),
+                              width=right.rx-top.lx+1,
+                              height=right.height))
+        for rect in rects:
+            self.fill_rect(rect,self.TUNNEL)
+        img = self.img
+        for xy in circle_rect.xys:
+             if not any((xy in rect for rect in rects)):
+                 img.putpixel(xy,self.WALL)
+        # fill the opening
+        #════════════════════
+        point0 = self.maze_rect.top_left
+        point1 = self.next_color_change(point0,Rect.RIGHT)
+        point2 = self.next_color_change(point1,Rect.RIGHT)
+        point3 = self.next_color_change(point2,Rect.DOWN)
+        rect = Rect(top_left=point0,
+                    width=point3[0]-point0[0]+1,
+                    height=point3[1]-point0[1])
+        self.fill_rect(rect,self.WALL)
+            
+    def _circle_rect(self):
+        # find the first tunnel
+        x,y = self.maze_top_left
+        x0,y0 = self.next_color_change((x,y),Rect.RIGHT)
+        x1,y1 = self.next_color_change((x0,y0),Rect.RIGHT)
+        x0 += (x1-x0)//2 # move to the middle of the tunnel
+        # move down to the top border of the circle
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self.next_color_change((x0,y0),(0,1))
+        top_y = y0
+        # move down to the bottom border of the circle
+        x0,y0 = self.next_color_change((x0,y0),(0,1))
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self.next_color_change((x0,y0),(0,1))
+        x0,y0 = self.next_color_change((x0,y0),(0,1))
+        bottom_y = y0-1
+        # go back to the center
+        center = x0,math.ceil((top_y+bottom_y)/2)
+        x0,y0 = center
+        # go to the left border
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self.next_color_change((x0,y0),(-1,0))
+        x0,y0 = self.next_color_change((x0,y0),(-1,0))
+        left_x = x0+1
+        # go to the right border
+        x0,y0 = center
+        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
+            x0,y0 = self.next_color_change((x0,y0),(1,0))
+        x0,y0 = self.next_color_change((x0,y0),(1,0))
+        right_x = x0-1
+        return Rect((left_x,top_y),
+                    right_x-left_x+1,
+                    bottom_y-top_y+1)
+    
+    #════════════════════════════════════════
+    # graph
+    
     def graph(self, trace=False):
         if trace:
             trace_img = self.img.copy()
@@ -454,40 +584,6 @@ class MazeImage:
             root_juncts.append(Rect((mx,y0),1,1))
         self._root_juncts = root_juncts
         return root_juncts
-
-    def _circle_rect(self):
-        # find the first tunnel
-        x,y = self.maze_top_left
-        x0,y0 = self.next_color_change((x,y),Rect.RIGHT)
-        x1,y1 = self.next_color_change((x0,y0),Rect.RIGHT)
-        x0 += (x1-x0)//2 # move to the middle of the tunnel
-        # move down to the top border of the circle
-        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(0,1))
-        top_y = y0
-        # move down to the bottom border of the circle
-        x0,y0 = self.next_color_change((x0,y0),(0,1))
-        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(0,1))
-        x0,y0 = self.next_color_change((x0,y0),(0,1))
-        bottom_y = y0-1
-        # go back to the center
-        center = x0,math.ceil((top_y+bottom_y)/2)
-        x0,y0 = center
-        # go to the left border
-        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(-1,0))
-        x0,y0 = self.next_color_change((x0,y0),(-1,0))
-        left_x = x0+1
-        # go to the right border
-        x0,y0 = center
-        while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(1,0))
-        x0,y0 = self.next_color_change((x0,y0),(1,0))
-        right_x = x0-1
-        return Rect((left_x,top_y),
-                    right_x-left_x+1,
-                    bottom_y-top_y+1)
     
     def _missing_directions(self,junct):
         existing_directions = set()
@@ -713,7 +809,8 @@ def process_image(fullname):
     name,ext = os.path.splitext(fullname)
     img = Image.open(os.path.join("images",fullname))
     script_manhattan(img)
-    img.save(os.path.join("images"),f"{name}_processed.tiff")
+    remove_big_tunnels(img)
+    img.save(os.path.join("images", f"{name}_processed.tiff"))
     
 def script_manhattan(img):
     for x,y in itertools.product(range(img.width),range(img.height)):
@@ -724,12 +821,13 @@ def script_manhattan(img):
         img.putpixel((x,y),new_color)
 
 def remove_big_tunnels(img):
-    maze_img = MazeImage(Image.open(f"images/{fullname}"))
+    maze_img = MazeImage(img)
     maze_img.fill_big_tunnels()
 
 def scratch():
-    maze = MazeImage(Image.open("images/maze3_no_circle.tiff"))
-    maze.fix_tunnels()
+    maze = MazeImage(Image.open("images/maze6_processed.tiff"))
+    maze.remove_circle()
+    maze.img.save("images/maze6_no_circle.tiff")
     # maze._fix_horizontal((48,73))
     # maze._fix_horizontal((227,99))
     # maze._fix_horizontal((381,99))
