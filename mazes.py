@@ -215,6 +215,7 @@ class MazeImage:
         return width, height
 
     #════════════════════════════════════════
+    
     def remove_bumps(self):
         xys = itertools.product(range(self.img.width),range(self.img.height))
         bumps = deque()
@@ -343,7 +344,6 @@ class MazeImage:
                     neigh_x, neigh_y = neighbor.top_left
                     cost = abs(junct_x-neigh_x)+abs(junct_y-neigh_y)
                     graph.add_edges_from([(junct,neighbor,{"cost":cost})])
-                    # print(f"### {junct.top_left}--{neighbor.top_left}")                    
                     if trace:
                         draw_edge(junct, neighbor, trace_draw)
                         trace_copy = trace_img.copy()
