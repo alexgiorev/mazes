@@ -68,7 +68,12 @@ class Rect:
         y = self.top_left[1]
         return range(y, y+self.height)
 
-    
+    @property
+    def xys(self):
+        for y in self.ys:
+            for x in self.xs:
+                yield (x,y)
+
 class MazeImage:
     TUNNEL = (255,255,255)
     WALL = (136,170,136)
@@ -78,20 +83,37 @@ class MazeImage:
     COLORS = (TUNNEL, WALL, CIRCLE_BORDER, CIRCLE_INTERNALS)
     VERTICAL = True
     HORIZONTAL = False
-    PROBE_LENGTH = 10
     TUNNEL_SIZE = 7
+    PROBE_LENGTH = 2*TUNNEL_SIZE
     
     def __init__(self,img):
         self.img = img
         self.draw = ImageDraw.Draw(img)
+
+    #════════════════════════════════════════
+    # utils
     
     def in_tunnel(self,xy):
         return self.closest_color(xy) == self.TUNNEL
+    
+    def rect_in_tunnel(self,rect):
+        for xy in rect.xys:
+            if not self.in_tunnel(xy):
+                return False
+        return True
+    
     def in_wall(self,xy):
         return self.closest_color(xy) == self.WALL
+    
+    def rect_in_wall(self,rect):
+        for xy in rect.xys:
+            if not self.in_wall(xy):
+                return False
+        return True
+    
     def in_goal(self,xy):
         return self.closest_color(xy) == self.GOAL
-    
+
     def closest_color(self,xy):
         def dist(color1,color2):
             # manhattan length
@@ -103,6 +125,31 @@ class MazeImage:
                      for COLOR in MazeImage.COLORS]
         return min(distances)[1]
 
+    @property
+    def xys(self):
+        for y in range(self.img.height):
+            for x in range(self.img.width):
+                yield x,y
+
+    def next_color_change(self, xy, direction):
+        x,y = xy
+        dx,dy = direction
+        color = self.closest_color(xy)
+        while True:
+            x+=dx; y+=dy
+            try:
+                new_color = self.closest_color((x,y))
+            except IndexError:
+                return None
+            if new_color != color:
+                return x,y
+
+    def fill_rect(self,rect,color):
+        self.draw.rectangle((rect.top_left,rect.bottom_right),
+                            fill=color,
+                            outline=color)
+            
+    #════════════════════════════════════════
     def junct_neighbor(self, junct, direction):
         junct = junct.move(direction, amount=self.PROBE_LENGTH)
         if not self.in_tunnel(junct.top_left):
@@ -216,69 +263,90 @@ class MazeImage:
 
     #════════════════════════════════════════
     
-    def remove_bumps(self):
-        xys = itertools.product(range(self.img.width),range(self.img.height))
-        bumps = deque()
-        corners = set()
-        for xy in xys:
-            status = self._bump_status(xy)
-            if status in ("fake_corner", "alone"):
-                bumps.append(xy)
-            elif status == "corner":
-                corners.add(xy)
-        img = self.img
-        while bumps:
-            xy = bumps.popleft()
-            # bump status could have changed since it was added to the queue
-            if self._bump_status(xy) is None:
-                continue
-            img.putpixel(xy, self.TUNNEL)
-            for xy0 in self.neighbor_xys(xy,"straight"):
-                status = self._bump_status(xy0)
-                if status in ("fake_corner", "alone"):
-                    bumps.append(xy0)
-                elif status == "corner":
-                    corners.add(xy0)
-        for corner in corners:
-            img.putpixel(corner, self.TUNNEL)
+    def fix_tunnels(self):
+        horizontal_xys = set()
+        vertical_xys = set()
+        for xy in self.maze_rect.xys:
+            if xy not in horizontal_xys and self._check_horizontal(xy):
+                rect = self._fix_horizontal(xy)
+                horizontal_xys.update(rect.xys)
+            if xy not in vertical_xys and self._check_vertical(xy):
+                rect = self._fix_vertical(xy)
+                vertical_xys.update(rect.xys)
 
-    def _bump_status(self, xy):
-        if not self.in_wall(xy):
-            return None
-        straight = sum(1 for color in self.neighbor_pixels(xy, "straight")
-                       if color == self.TUNNEL)
-        if straight > 2:
-            return "alone"
-        elif straight < 2:
-            return None
-        diagonal = sum(1 for color in self.neighbor_pixels(xy, "diagonal")
-                       if color == self.TUNNEL)
-        if diagonal > 2:
-            return None
-        elif diagonal == 2:
-            return "fake_corner"
-        else:
-            return "corner"
-                
-    def neighbor_pixels(self, xy, directions=None):
-        for xy0 in self.neighbor_xys(xy,directions):
-            yield self.closest_color(xy0)
-
-    def neighbor_xys(self, xy, directions=None):
-        if directions is None:
-            directions = ((1,0),(-1,0),(0,1),(0,-1),
-                          (1,1),(1,-1),(-1,1),(-1,-1))
-        elif directions == "straight":
-            directions = ((1,0),(-1,0),(0,1),(0,-1))
-        elif directions == "diagonal":
-            directions = ((1,1),(1,-1),(-1,1),(-1,-1))
-        else: # directions is an iterable
-            pass
+    def _check_horizontal(self,xy):
         x,y = xy
-        for dx,dy in directions:
-            x0,y0 = x+dx,y+dy
-            if 0 <= x0 < self.img.width and 0 <= y0 < self.img.height:
-                yield x0,y0
+        for x0 in range(x,x+self.PROBE_LENGTH):
+            if not self.in_tunnel((x0,y)):
+                return False
+        return True
+
+    def _check_vertical(self,xy):
+        x,y = xy
+        for y0 in range(y,y+self.PROBE_LENGTH):
+            if not self.in_tunnel((x,y0)):
+                return False
+        return True
+
+    def _tunnels_at(self,xy):
+        result = []
+        for dx,dy in [(1,0),(0,1)]:
+            x,y = xy
+            for _ in range(self.PROBE_LENGTH):
+                if not self.in_tunnel((x,y)):
+                    result.append(False)
+                    break
+                else:
+                    x+=dx; y+=dy
+            else:
+                result.append(True)
+        return result
+                
+    def _fix_horizontal(self,xy):
+        """Fixes the horizontal tunnel at XY and returns its Rect"""
+        x,y = xy
+        size = self.TUNNEL_SIZE
+        # find the X of the right wall
+        right_wall_x = x+self.PROBE_LENGTH
+        while True:
+            probe = Rect((right_wall_x,y),width=1,height=size)
+            if self.rect_in_wall(probe):
+                break
+            else:
+                right_wall_x += 1
+        rect = Rect(xy, width=right_wall_x-x, height=size)
+        for x0 in rect.xs:
+            tunnel_brush = Rect((x0,y),width=1,height=size)
+            self.fill_rect(tunnel_brush,self.TUNNEL)
+            wall_brushes = [Rect((x0,y-size),width=1,height=size),
+                            Rect((x0,y+size),width=1,height=size)]
+            for wall_brush in wall_brushes:
+                if not self.rect_in_tunnel(wall_brush):
+                    self.fill_rect(wall_brush, self.WALL)
+        return rect
+            
+    def _fix_vertical(self,xy):
+        """Fixes the vertical tunnel at XY and returns its Rect"""
+        x,y = xy
+        size = self.TUNNEL_SIZE
+        # find the y of the bottom wall
+        bottom_wall_y = y+self.PROBE_LENGTH
+        while True:
+            probe = Rect((x,bottom_wall_y),width=size,height=1)
+            if self.rect_in_wall(probe):
+                break
+            else:
+                bottom_wall_y += 1
+        rect = Rect(xy, width=size, height=bottom_wall_y-y)
+        for y0 in rect.ys:
+            tunnel_brush = Rect((x,y0),width=size,height=1)
+            self.fill_rect(tunnel_brush,self.TUNNEL)
+            wall_brushes = [Rect((x-size,y0),width=size,height=1),
+                            Rect((x+size,y0),width=size,height=1)]
+            for wall_brush in wall_brushes:
+                if not self.rect_in_tunnel(wall_brush):
+                    self.fill_rect(wall_brush, self.WALL)
+        return rect
 
     #════════════════════════════════════════
     @property
@@ -390,49 +458,36 @@ class MazeImage:
     def _circle_rect(self):
         # find the first tunnel
         x,y = self.maze_top_left
-        x0,y0 = self._next_color_change((x,y),Rect.RIGHT)
-        x1,y1 = self._next_color_change((x0,y0),Rect.RIGHT)
+        x0,y0 = self.next_color_change((x,y),Rect.RIGHT)
+        x1,y1 = self.next_color_change((x0,y0),Rect.RIGHT)
         x0 += (x1-x0)//2 # move to the middle of the tunnel
         # move down to the top border of the circle
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self._next_color_change((x0,y0),(0,1))
+            x0,y0 = self.next_color_change((x0,y0),(0,1))
         top_y = y0
         # move down to the bottom border of the circle
-        x0,y0 = self._next_color_change((x0,y0),(0,1))
+        x0,y0 = self.next_color_change((x0,y0),(0,1))
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self._next_color_change((x0,y0),(0,1))
-        x0,y0 = self._next_color_change((x0,y0),(0,1))
+            x0,y0 = self.next_color_change((x0,y0),(0,1))
+        x0,y0 = self.next_color_change((x0,y0),(0,1))
         bottom_y = y0-1
         # go back to the center
         center = x0,math.ceil((top_y+bottom_y)/2)
         x0,y0 = center
         # go to the left border
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self._next_color_change((x0,y0),(-1,0))
-        x0,y0 = self._next_color_change((x0,y0),(-1,0))
+            x0,y0 = self.next_color_change((x0,y0),(-1,0))
+        x0,y0 = self.next_color_change((x0,y0),(-1,0))
         left_x = x0+1
         # go to the right border
         x0,y0 = center
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self._next_color_change((x0,y0),(1,0))
-        x0,y0 = self._next_color_change((x0,y0),(1,0))
+            x0,y0 = self.next_color_change((x0,y0),(1,0))
+        x0,y0 = self.next_color_change((x0,y0),(1,0))
         right_x = x0-1
         return Rect((left_x,top_y),
                     right_x-left_x+1,
                     bottom_y-top_y+1)
-
-    def _next_color_change(self, xy, direction):
-        x,y = xy
-        dx,dy = direction
-        color = self.closest_color(xy)
-        while True:
-            x+=dx; y+=dy
-            try:
-                new_color = self.closest_color((x,y))
-            except IndexError:
-                return None
-            if new_color != color:
-                return x,y
     
     def _missing_directions(self,junct):
         existing_directions = set()
@@ -641,17 +696,6 @@ def manhattan_length(color1,color2):
     return (abs(color1[0]-color2[0]) +
             abs(color1[1]-color2[1]) +
             abs(color1[2]-color2[2]))
-    
-def script_manhattan(fullname):
-    name,ext = os.path.splitext(fullname)
-    img = Image.open(f"images/{fullname}")
-    for x,y in itertools.product(range(img.width),range(img.height)):
-        color = img.getpixel((x,y))
-        if color not in MazeImage.COLORS:            
-            distances = [(manhattan_length(COLOR,color),COLOR) for COLOR in MazeImage.COLORS]
-            new_color = min(distances)[1]
-            img.putpixel((x,y),new_color)
-    img.save(f"images/{name}_manhattan.tiff")
 
 def graph_dot(graph):
     def node_name(node):
@@ -665,16 +709,28 @@ def graph_dot(graph):
     lines.append("}"); lines.append("")
     return "\n".join(lines)
 
-def remove_big_tunnels(fullname):
-    name, ext = os.path.splitext(fullname)
+def process_image(fullname):
+    name,ext = os.path.splitext(fullname)
+    img = Image.open(os.path.join("images",fullname))
+    script_manhattan(img)
+    img.save(os.path.join("images"),f"{name}_processed.tiff")
+    
+def script_manhattan(img):
+    for x,y in itertools.product(range(img.width),range(img.height)):
+        color = img.getpixel((x,y))
+        distances = [(manhattan_length(COLOR,color),COLOR)
+                     for COLOR in MazeImage.COLORS]
+        new_color = min(distances)[1]
+        img.putpixel((x,y),new_color)
+
+def remove_big_tunnels(img):
     maze_img = MazeImage(Image.open(f"images/{fullname}"))
     maze_img.fill_big_tunnels()
-    maze_img.img.save(f"images/{name}_no_big.tiff")
 
 def scratch():
     maze = MazeImage(Image.open("images/maze3_no_circle.tiff"))
-    maze.remove_bumps()
-    maze.img.save("images/maze3_no_bumps.tiff")
-    graph = maze.graph()    
-    print(maze._circle_rect())
-    print(maze._root_juncts())
+    maze.fix_tunnels()
+    # maze._fix_horizontal((48,73))
+    # maze._fix_horizontal((227,99))
+    # maze._fix_horizontal((381,99))
+    maze.img.save("images/maze3_fix_tunnels_test.tiff")
