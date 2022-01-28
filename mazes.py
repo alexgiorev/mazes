@@ -154,7 +154,8 @@ class MazeImage:
             for x in range(self.img.width):
                 yield x,y
 
-    def next_color_change(self, xy, direction):
+    def next_color(self, xy, direction,inside=True):
+        """INSIDE controls whether to leave point inside the next color or right before it"""
         x,y = xy
         dx,dy = direction
         color = self.closest_color(xy)
@@ -163,9 +164,9 @@ class MazeImage:
             try:
                 new_color = self.closest_color((x,y))
             except IndexError:
-                print("### next_color_change: IndexError")
                 return None
             if new_color != color:
+                if not inside: x-=dx; y-=dy
                 return x,y
 
     def fill_rect(self,rect,color):
@@ -389,8 +390,8 @@ class MazeImage:
             return False
         def top_strip():
             point = mx,ty-3
-            lx,ly = self.next_color_change(point, Rect.LEFT)
-            rx,ry = self.next_color_change(point, Rect.RIGHT)
+            lx,ly = self.next_color(point, Rect.LEFT)
+            rx,ry = self.next_color(point, Rect.RIGHT)
             width = rx-lx-1
             x = lx+1; y = self.maze_rect.top_left[1]
             return Rect((x,y),width,1)
@@ -398,8 +399,8 @@ class MazeImage:
             point = bx+3,my
             if self.in_wall(point):
                 return None
-            ux,uy = self.next_color_change(point, Rect.UP)
-            dx,dy = self.next_color_change(point, Rect.DOWN)
+            ux,uy = self.next_color(point, Rect.UP)
+            dx,dy = self.next_color(point, Rect.DOWN)
             rect = Rect((ux,uy+1),width=1,height=dy-uy-1)
             while has_yellow(rect):
                 rect = rect.move(Rect.RIGHT)
@@ -408,8 +409,8 @@ class MazeImage:
             point = mx,by+3
             if self.in_wall(point):
                 return None
-            lx,ly = self.next_color_change(point, Rect.LEFT)
-            rx,ry = self.next_color_change(point, Rect.RIGHT)
+            lx,ly = self.next_color(point, Rect.LEFT)
+            rx,ry = self.next_color(point, Rect.RIGHT)
             rect = Rect((lx+1,ly),width=rx-lx-1,height=1)
             while has_yellow(rect):
                 rect = rect.move(Rect.DOWN)
@@ -441,9 +442,9 @@ class MazeImage:
         # fill the opening
         #════════════════════
         point0 = self.maze_rect.top_left
-        point1 = self.next_color_change(point0,Rect.RIGHT)
-        point2 = self.next_color_change(point1,Rect.RIGHT)
-        point3 = self.next_color_change(point2,Rect.DOWN)
+        point1 = self.next_color(point0,Rect.RIGHT)
+        point2 = self.next_color(point1,Rect.RIGHT)
+        point3 = self.next_color(point2,Rect.DOWN)
         rect = Rect(top_left=point0,
                     bottom_right=(point3[0],point3[1]-1))
         self.fill_rect(rect,self.WALL)
@@ -451,32 +452,32 @@ class MazeImage:
     def _circle_rect(self):
         # find the first tunnel
         x,y = self.maze_top_left
-        x0,y0 = self.next_color_change((x,y),Rect.RIGHT)
-        x1,y1 = self.next_color_change((x0,y0),Rect.RIGHT)
+        x0,y0 = self.next_color((x,y),Rect.RIGHT)
+        x1,y1 = self.next_color((x0,y0),Rect.RIGHT)
         x0 += (x1-x0)//2 # move to the middle of the tunnel
         # move down to the top border of the circle
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(0,1))
+            x0,y0 = self.next_color((x0,y0),(0,1))
         top_y = y0
         # move down to the bottom border of the circle
-        x0,y0 = self.next_color_change((x0,y0),(0,1))
+        x0,y0 = self.next_color((x0,y0),(0,1))
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(0,1))
-        x0,y0 = self.next_color_change((x0,y0),(0,1))
+            x0,y0 = self.next_color((x0,y0),(0,1))
+        x0,y0 = self.next_color((x0,y0),(0,1))
         bottom_y = y0-1
         # go back to the center
         center = x0,math.ceil((top_y+bottom_y)/2)
         x0,y0 = center
         # go to the left border
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(-1,0))
-        x0,y0 = self.next_color_change((x0,y0),(-1,0))
+            x0,y0 = self.next_color((x0,y0),(-1,0))
+        x0,y0 = self.next_color((x0,y0),(-1,0))
         left_x = x0+1
         # go to the right border
         x0,y0 = center
         while not self.closest_color((x0,y0)) == self.CIRCLE_BORDER:
-            x0,y0 = self.next_color_change((x0,y0),(1,0))
-        x0,y0 = self.next_color_change((x0,y0),(1,0))
+            x0,y0 = self.next_color((x0,y0),(1,0))
+        x0,y0 = self.next_color((x0,y0),(1,0))
         right_x = x0-1
         return Rect((left_x,top_y),
                     right_x-left_x+1,
@@ -499,13 +500,13 @@ class MazeImage:
         def func(xy):
             img.putpixel(xy,self.TUNNEL)
         point0 = self.maze_rect.bottom_right
-        point1 = self.next_color_change(point0, Rect.LEFT)
-        point2 = self.next_color_change(point1, Rect.UP)
+        point1 = self.next_color(point0, Rect.LEFT)
+        point2 = self.next_color(point1, Rect.UP)
         self.foreach(point2,func,child_pred)
         # fill the gap
         #════════════════════
-        point2 = self.next_color_change(point1, Rect.LEFT)
-        point3 = self.next_color_change(point2, Rect.UP)
+        point2 = self.next_color(point1, Rect.LEFT)
+        point3 = self.next_color(point2, Rect.UP)
         top_left = (point3[0], point3[1]+1)
         rect = Rect(top_left, bottom_right=point0)
         self.fill_rect(rect, self.WALL)
@@ -562,8 +563,8 @@ class MazeImage:
         try: return self._root_junct
         except AttributeError: pass
         top_left = self.maze_rect.top_left
-        point = self.next_color_change(top_left,(1,1))
-        point = self.next_color_change(point,Rect.UP)
+        point = self.next_color(top_left,(1,1))
+        point = self.next_color(point,Rect.UP)
         point = point[0]+self.TUNNEL_SIZE//2, point[1]+1+self.TUNNEL_SIZE//2
         result = self._root_junct = Rect(point,1,1)
         return result
