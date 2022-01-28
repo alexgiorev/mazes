@@ -1,0 +1,1 @@
+Playing with images, mazes and search algorithms. I take an image of a maze from [[https://www.mathsisfun.com/games/mazes.html][here]], process the image, solve the maze and create a sequence of images which show the steps taken by the search algorithm.
