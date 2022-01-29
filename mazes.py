@@ -736,6 +736,49 @@ class Searcher:
         self.end(None)
         return None, search_tree
 
+    # The difference with Searcher.dfs is that this sorts the children of a node
+    # based on HEURISTIC before adding them to the frontier
+    def smart_dfs(self, heuristic=None):
+        if heuristic is None:
+            heuristic = self.manhattan
+        root, goal, graph = self.root, self.goal, self.graph
+        self.search_tree = search_tree = nx.DiGraph()
+        search_tree.add_node(root)
+        self.frontier = frontier = [root]
+        self.explored = explored = set()
+        self.did_init()
+        while frontier:
+            junct = frontier.pop()
+            if junct in explored:
+                continue
+            self.current = junct
+            self.before_expansion()
+            # HERE is where the difference with Searcher.dfs manifests
+            neighbors = sorted(graph.neighbors(junct),key=heuristic,reverse=True)
+            edges = []
+            for neighbor in neighbors:
+                if neighbor in explored:
+                    continue
+                elif neighbor in search_tree:
+                    # NEIGHBOR is in FRONTIER
+                    continue
+                elif neighbor == goal:
+                    path = [neighbor]
+                    while junct is not None:
+                        path.append(junct)
+                        junct = next(search_tree.predecessors(junct),None)
+                    path.reverse()
+                    self.end(path)
+                    return path, search_tree
+                else:
+                    search_tree.add_edge(junct, neighbor)
+                    edges.append((junct,neighbor))
+                    frontier.append(neighbor)
+            self.did_expand_node(edges)
+            explored.add(junct)
+        self.end(None)
+        return None, search_tree
+
     # hooks
     #════════════════════════════════════════
     
@@ -764,6 +807,13 @@ class Searcher:
         draw_edge(self.draw, node1, node2)
         self._save_canvas()
 
+    def did_expand_node(self, edges):
+        if edges:
+            for node1, node2 in edges:
+                draw_node(self.draw, node2)
+                draw_edge(self.draw, node1, node2)
+            self._save_canvas()
+    
     def _save_canvas(self):
         img_name = self._next_img_name()
         self.canvas.save(os.path.join(self.DIR, img_name),quality=100)
@@ -778,6 +828,15 @@ class Searcher:
             draw_graph(self.draw, self.search_tree, color=COLOR("gray"))
             draw_path(self.draw, path)
             self._save_canvas()
+
+    # heuristics
+    #════════════════════════════════════════
+    def manhattan(self, node):
+        (x1,y1),(x2,y2) = node.top_left, self.goal.top_left
+        return abs(x1-x2)+abs(y1-y2)
+
+    def dist(self, node):
+        return math.dist(node.top_left, self.goal.top_left)
         
     # best_first_search
     #════════════════════════════════════════
@@ -821,10 +880,11 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.dfs()
+    path, search_tree = searcher.smart_dfs()
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
     img = Image.open(path)
     MazeImage(img).process_image()
     img.save(path)
+
