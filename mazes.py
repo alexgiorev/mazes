@@ -240,8 +240,24 @@ class MazeImage:
                                 if child_pred(nxy) and nxy not in visited))
         except StopIteration:
             pass
-                
-    # fill_big_tunnels
+
+    def map_manhattan(self):
+        img = self.img
+        for xy in self.xys:
+            img.putpixel(xy,self.closest_color(xy))
+
+    # process_image
+    #════════════════════════════════════════
+    def process_image(self):
+        img = self.img
+        for xy in self.xys:
+            img.putpixel(xy,self.closest_color(xy))
+        self.remove_initial_circle()
+        self.remove_goal_circle()
+        self.fill_big_tunnels()
+        self.fix_tunnels()
+
+    # process_image.fill_big_tunnels
     #════════════════════════════════════════
     
     def fill_big_tunnels(self):
@@ -289,7 +305,7 @@ class MazeImage:
         except StopIteration: pass
         return width, height
     
-    # fix_tunnels
+    # process_image.fix_tunnels
     #════════════════════════════════════════
     
     def fix_tunnels(self):
@@ -377,7 +393,7 @@ class MazeImage:
                     self.fill_rect(wall_brush, self.WALL)
         return rect
 
-    # remove the circles which mark the initial and goal positions
+    # process_image.remove_circles
     #════════════════════════════════════════
     
     def remove_initial_circle(self):
@@ -511,7 +527,7 @@ class MazeImage:
         rect = Rect(top_left, bottom_right=point0)
         self.fill_rect(rect, self.WALL)
                     
-    # Graph creation. This assumes the image has already been processed.
+    # Graph creation
     #════════════════════════════════════════
 
     def graph(self, trace=False):
@@ -717,37 +733,6 @@ class Searcher:
     def best_first_search(graph,root):
         raise NotImplementedError
 
-# testing
-#════════════════════════════════════════
-    
-def test_neighbors():
-    maze_img = MazeImage(Image.open("maze1.jpg"))
-    junct = Rect((329,150),1,1)
-    left_neighbor = maze_img.junct_neighbor(junct,Rect.LEFT)
-    down_neighbor = maze_img.junct_neighbor(junct,Rect.DOWN)
-    assert left_neighbor == Rect((281, 150),1,1)
-    assert down_neighbor == Rect((329, 173),1,1)
-    
-    junct = Rect((354, 166),1,1)
-    left_neighbor = maze_img.junct_neighbor(junct,Rect.LEFT)
-    right_neighbor = maze_img.junct_neighbor(junct,Rect.RIGHT)
-    up_neighbor = maze_img.junct_neighbor(junct,Rect.UP)
-    assert left_neighbor is right_neighbor is None
-
-    junct = Rect((44,54),1,1)
-    down = maze_img.junct_neighbor(junct,Rect.DOWN)
-    assert down == Rect((44, 102),1,1)
-    right = maze_img.junct_neighbor(down,Rect.RIGHT)
-    assert right == Rect((114, 102),1,1)
-    up = maze_img.junct_neighbor(right,Rect.UP)
-    assert up == Rect((114, 54),1,1)
-    left = maze_img.junct_neighbor(up,Rect.LEFT)
-    assert left == Rect((90, 54),1,1)
-    down = maze_img.junct_neighbor(left,Rect.DOWN)
-    assert down == Rect((90, 78),1,1)
-    left = maze_img.junct_neighbor(down,Rect.LEFT)
-    assert left == Rect((68, 78),1,1)
-
 # drawing
 #════════════════════════════════════════
 
@@ -765,15 +750,6 @@ def draw_edge(node1, node2, draw, color=COLOR("black")):
     draw_node(node1, draw, color); draw_node(node2, draw, color)
     xy1, xy2 = node1.top_left, node2.top_left
     draw.line((xy1,xy2),fill=color,width=1)
-    
-def draw_graph_script():
-    img = Image.open("images/maze1_no_big.tiff")
-    maze_img = MazeImage(img.copy())
-    graph = maze_img.graph()
-    draw = ImageDraw.Draw(img)
-    draw_graph(graph,draw)
-    img.save("draw_graph_result.tiff")    
-    return graph
 
 def draw_path(nodes,draw,color=(0,0,0)):
     iter1, iter2 = iter(nodes), iter(nodes)
@@ -782,9 +758,12 @@ def draw_path(nodes,draw,color=(0,0,0)):
     for node1,node2 in zip(iter1,iter2):
         draw_edge(node1, node2, draw, color)
 
+# misc scripts
+#════════════════════════════════════════
+
 # search_bfs
 def scratch():
-    img = Image.open("images/maze1.tiff")
+    img = Image.open("images/maze4.tiff")
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
@@ -795,77 +774,8 @@ def scratch():
     # img.save("maze1_path.tiff")
     # return graph
 
-# misc scripts
-#════════════════════════════════════════
-    
-def script0():
-    img = Image.open("maze1.jpg")
-    visible = (217,234,218)
-    # dist = math.dist((255,255,255),visible)
-    dist = 5
-    for x,y in itertools.product(range(img.width),range(img.height)):
-        color = img.getpixel((x,y))
-        if (color != (255,255,255) and
-            0 < math.dist((255,255,255),color) <= 5):
-            img.putpixel((x,y),(157,11,11))
-    img.save("maze_script0.tiff")
-
-def script1():
-    img = Image.open("maze1.jpg")
-    for x,y in itertools.product(range(img.width),range(img.height)):
-        color = img.getpixel((x,y))
-        if color not in MazeImage.COLORS:            
-            distances = [(math.dist(COLOR,color),COLOR) for COLOR in MazeImage.COLORS]
-            new_color = min(distances)[1]
-            img.putpixel((x,y),new_color)
-    img.save("maze_script1.tiff")
-
-def manhattan_length(color1,color2):
-    return (abs(color1[0]-color2[0]) +
-            abs(color1[1]-color2[1]) +
-            abs(color1[2]-color2[2]))
-
-def graph_dot(graph):
-    def node_name(node):
-        return str(node.top_left)
-    lines = ["graph {"]
-    for node,attrs in graph.nodes.items():
-        lines.append(f'    "{node_name(node)}";')
-    for (node1,node2),attrs in graph.edges.items():
-        name1, name2 = node_name(node1), node_name(node2)
-        lines.append(f'    "{name1}"--"{name2}";')
-    lines.append("}"); lines.append("")
-    return "\n".join(lines)
-
 def process_image(fullname):
-    name,ext = os.path.splitext(fullname)
     path = os.path.join("images",fullname)
     img = Image.open(path)
-    script_manhattan(img)
-    mimg = MazeImage(img)
-    mimg.remove_initial_circle()
-    mimg.remove_goal_circle()
-    mimg.fill_big_tunnels()
-    mimg.fix_tunnels()
+    MazeImage(img).process_image()
     img.save(path)
-    
-def script_manhattan(img):
-    for x,y in itertools.product(range(img.width),range(img.height)):
-        color = img.getpixel((x,y))
-        distances = [(manhattan_length(COLOR,color),COLOR)
-                     for COLOR in MazeImage.COLORS]
-        new_color = min(distances)[1]
-        img.putpixel((x,y),new_color)
-
-def remove_big_tunnels(img):
-    maze_img = MazeImage(img)
-    maze_img.fill_big_tunnels()
-
-def scratch():
-    mimg = MazeImage(Image.open("images/maze2.tiff"))
-    print(f"root: {mimg.root_junct}")
-    print(f"goal: {mimg.goal_junct}")
-
-def scratch():
-    mimg = MazeImage(Image.open("images/maze1.tiff"))
-    graph = mimg.graph(trace=True)
