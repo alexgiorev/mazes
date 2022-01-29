@@ -540,8 +540,8 @@ class MazeImage:
         root_junct = self.root_junct
         goal_junct = self.goal_junct
         self._graph = graph = nx.Graph()
-        graph.add_nodes_from([root_junct,
-                              (goal_junct,{"is_goal":True})])
+        graph.add_nodes_from([root_junct, goal_junct])
+        graph.graph["goal"] = goal_junct
         #════════════════════
         frontier = deque([root_junct])
         expanded = set()
@@ -558,6 +558,7 @@ class MazeImage:
                     graph.add_edges_from([(junct,neighbor,{"cost":cost})])
                     frontier.append(neighbor)
                     if trace:
+                        draw_node(trace_draw, neighbor)
                         draw_edge(trace_draw, junct, neighbor)
                         trace_copy = trace_img.copy()
                         trace_copy.info["name"] = str(trace_index).rjust(6,"0")+".tiff"
@@ -652,14 +653,16 @@ class MazeImage:
 class Searcher:
     def __init__(self,graph,roots=None):
         self.graph = graph
-        self.root = roots or graph.graph["root"]
+        self.root = graph.graph["root"]
+        self.goal = graph.graph["goal"]
 
     # breadth-first-search
     #════════════════════════════════════════
 
-    # This is like Searcher.dfs but the frontier is a deque instead of a stack (list)
+    # This is like Searcher.dfs but the frontier
+    # is a deque instead of a stack (list)
     def bfs(self):
-        root, graph = self.root, self.graph
+        root, goal, graph = self.root, self.goal, self.graph
         self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_node(root)
         self.frontier = frontier = deque([root])
@@ -677,7 +680,7 @@ class Searcher:
                 elif neighbor in search_tree:
                     # NEIGHBOR is in FRONTIER
                     continue
-                elif graph.nodes[neighbor].get("is_goal"):
+                elif neighbor == goal:
                     path = [neighbor]
                     while junct is not None:
                         path.append(junct)
@@ -696,11 +699,10 @@ class Searcher:
     # depth-first-search
     #════════════════════════════════════════
 
-    # This is like Searcher.bfs but the frontier is a stack (list) instead of a queue (deque)
+    # This is like Searcher.bfs but the frontier
+    # is a stack (list) instead of a queue (deque)
     def dfs(self):
-        # It's like BFS except that the frontier is a list used as a stack
-        # instead of a deque used as a queue
-        root, graph = self.root, self.graph
+        root, goal, graph = self.root, self.goal, self.graph
         self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_node(root)
         self.frontier = frontier = [root]
@@ -718,7 +720,7 @@ class Searcher:
                 elif neighbor in search_tree:
                     # NEIGHBOR is in FRONTIER
                     continue
-                elif graph.nodes[neighbor].get("is_goal"):
+                elif neighbor == goal:
                     path = [neighbor]
                     while junct is not None:
                         path.append(junct)
@@ -747,13 +749,22 @@ class Searcher:
         self.iter_count = 0
         self.canvas = self.graph.graph["image"].copy()
         self.draw = ImageDraw.Draw(self.canvas)
+        draw_node(self.draw, self.root,
+                  size=7, color=COLOR("darkred"))
+        draw_node(self.draw, self.goal,
+                  size=7, color=COLOR("darkblue"))
+        self._save_canvas()
 
     def before_expansion(self):
         pass
 
     def did_extend_search_tree(self, edge):
         node1, node2 = edge
+        draw_node(self.draw, node2)
         draw_edge(self.draw, node1, node2)
+        self._save_canvas()
+
+    def _save_canvas(self):
         img_name = self._next_img_name()
         self.canvas.save(os.path.join(self.DIR, img_name),quality=100)
         
@@ -761,14 +772,13 @@ class Searcher:
         img_name = f"{str(self.iter_count).rjust(6,'0')}.jpg"
         self.iter_count += 1
         return img_name
-        
+
     def end(self, path):
         if path is not None:
             draw_graph(self.draw, self.search_tree, color=COLOR("gray"))
             draw_path(self.draw, path)
-            img_name = self._next_img_name()
-            self.canvas.save(os.path.join(self.DIR, img_name))
-
+            self._save_canvas()
+        
     # best_first_search
     #════════════════════════════════════════
     
@@ -779,17 +789,19 @@ class Searcher:
 #════════════════════════════════════════
 
 def draw_graph(draw,graph,color=COLOR("black")):
-    for junct1, junct2 in graph.edges:
-        draw_edge(draw,junct1,junct2,color=color)
+    for node1, node2 in graph.edges:
+        draw_node(draw,node1,color=color); draw_node(draw,node2,color=color)
+        draw_edge(draw,node1,node2,color=color)
 
-def draw_node(draw, node, color=COLOR("black")):
-    x,y = node.top_left
-    x1,y1 = x-1,y-1
-    x2,y2 = x1+2,y1+2
-    draw.rectangle(((x1,y1),(x2,y2)),fill=color,outline=color)
+def draw_node(draw, node, size=3, color=COLOR("black")):
+    lx,uy = node.top_left
+    rx,dy = node.top_left
+    for _ in range(size//2):
+        lx-=1; uy-=1;
+        rx+=1; dy+=1;
+    draw.rectangle(((lx,uy),(rx,dy)),fill=color,outline=color)
 
 def draw_edge(draw, node1, node2, color=COLOR("black")):
-    draw_node(draw,node1,color); draw_node(draw,node2,color)
     xy1, xy2 = node1.top_left, node2.top_left
     draw.line((xy1,xy2),fill=color,width=1)
 
@@ -798,6 +810,7 @@ def draw_path(draw, nodes, color=(0,0,0)):
     try: next(iter2)
     except StopIteration: pass
     for node1,node2 in zip(iter1,iter2):
+        draw_node(draw,node1,color=color); draw_node(draw,node2,color=color)
         draw_edge(draw, node1, node2, color)
 
 # misc scripts
@@ -809,11 +822,6 @@ def scratch_search():
     graph = mimg.graph()
     searcher = Searcher(graph)
     path, search_tree = searcher.dfs()
-    # draw = ImageDraw.Draw(img)
-    # draw_graph(search_tree,draw,color=COLOR("gray"))
-    # draw_path(path,draw,color=COLOR("black"))
-    # img.save("maze1_path.tiff")
-    # return graph
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
