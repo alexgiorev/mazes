@@ -822,25 +822,10 @@ class Searcher:
             draw_path(self.draw, path)
             self._save_canvas()
 
-    # heuristic and evaluation functions
+    # best first search (UCS, Greedy, A*)
     #════════════════════════════════════════
     
-    def hf_manhattan(self,junct):
-        (x1,y1),(x2,y2) = junct.top_left, self.goal.top_left
-        return abs(x1-x2)+abs(y1-y2)
-
-    def hf_dist(self,junct):
-        return math.dist(junct.top_left, self.goal.top_left)
-
-    def ef_cost(self,node):
-        return node["cost"]
-
-    def ef_manhattan(self,node):
-        return self.manhattan(node["junct"])+node["cost"]
-        
-    # best_first_search
-    #════════════════════════════════════════    
-    def best_first_search(self, ef):
+    def best_first(self, ef):
         def pop_min():
             node,priority = min(frontier.items(),key=operator.itemgetter(1))
             del frontier[node]
@@ -884,7 +869,31 @@ class Searcher:
                 explored.add(junct)
         self.end(None)
         return None, search_tree
-            
+
+    # heuristic and evaluation functions
+    #════════════════════════════════════════
+    
+    def hf_manhattan(self,junct):
+        (x1,y1),(x2,y2) = junct.top_left, self.goal.top_left
+        return abs(x1-x2)+abs(y1-y2)
+
+    def hf_dist(self,junct):
+        return math.dist(junct.top_left, self.goal.top_left)
+
+    def ef_cost(self,node):
+        return node["cost"]
+
+    def ef_greedy_manhattan(self,node):
+        return self.hf_manhattan(node["junct"])
+
+    def ef_greedy_dist(self,node):
+        return self.hf_dist(node["junct"])
+
+    def ef_astar_manhattan(self,node):
+        return self.hf_manhattan(node["junct"])+node["cost"]
+
+    def ef_astar_dist(self,node):
+        return self.hf_dist(node["junct"])+node["cost"]
 
 # drawing
 #════════════════════════════════════════
@@ -922,7 +931,7 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.best_first_search(searcher.ef_cost)
+    path, search_tree = searcher.best_first(searcher.ef_astar_manhattan)
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
