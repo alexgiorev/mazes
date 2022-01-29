@@ -672,8 +672,7 @@ class Searcher:
             junct = frontier.popleft()
             if junct in explored:
                 continue
-            self.current = junct
-            self.before_expansion()            
+            edges = []
             for neighbor in graph.neighbors(junct):
                 if neighbor in explored:
                     continue
@@ -690,8 +689,9 @@ class Searcher:
                     return path, search_tree
                 else:
                     search_tree.add_edge(junct, neighbor)
-                    self.did_extend_search_tree((junct,neighbor))
+                    edges.append((junct,neighbor))
                     frontier.append(neighbor)
+            self.did_expand_node(edges)
             explored.add(junct)
         self.end(None)
         return None, search_tree
@@ -712,8 +712,6 @@ class Searcher:
             junct = frontier.pop()
             if junct in explored:
                 continue
-            self.current = junct
-            self.before_expansion()            
             for neighbor in graph.neighbors(junct):
                 if neighbor in explored:
                     continue
@@ -737,10 +735,10 @@ class Searcher:
         return None, search_tree
 
     # The difference with Searcher.dfs is that this sorts the children of a node
-    # based on HEURISTIC before adding them to the frontier
-    def smart_dfs(self, heuristic=None):
-        if heuristic is None:
-            heuristic = self.manhattan
+    # based on the heuristic function HF before adding them to the frontier
+    def smart_dfs(self, hf=None):
+        if hf is None:
+            hf = self.hf_manhattan
         root, goal, graph = self.root, self.goal, self.graph
         self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_node(root)
@@ -751,10 +749,8 @@ class Searcher:
             junct = frontier.pop()
             if junct in explored:
                 continue
-            self.current = junct
-            self.before_expansion()
             # HERE is where the difference with Searcher.dfs manifests
-            neighbors = sorted(graph.neighbors(junct),key=heuristic,reverse=True)
+            neighbors = sorted(graph.neighbors(junct),key=hf,reverse=True)
             edges = []
             for neighbor in neighbors:
                 if neighbor in explored:
@@ -798,9 +794,6 @@ class Searcher:
                   size=7, color=COLOR("darkblue"))
         self._save_canvas()
 
-    def before_expansion(self):
-        pass
-
     def did_extend_search_tree(self, edge):
         node1, node2 = edge
         draw_node(self.draw, node2)
@@ -829,20 +822,69 @@ class Searcher:
             draw_path(self.draw, path)
             self._save_canvas()
 
-    # heuristics
-    #════════════════════════════════════════
-    def manhattan(self, node):
-        (x1,y1),(x2,y2) = node.top_left, self.goal.top_left
-        return abs(x1-x2)+abs(y1-y2)
-
-    def dist(self, node):
-        return math.dist(node.top_left, self.goal.top_left)
-        
-    # best_first_search
+    # heuristic and evaluation functions
     #════════════════════════════════════════
     
-    def best_first_search(graph,root):
-        raise NotImplementedError
+    def hf_manhattan(self,junct):
+        (x1,y1),(x2,y2) = junct.top_left, self.goal.top_left
+        return abs(x1-x2)+abs(y1-y2)
+
+    def hf_dist(self,junct):
+        return math.dist(junct.top_left, self.goal.top_left)
+
+    def ef_cost(self,node):
+        return node["cost"]
+
+    def ef_manhattan(self,node):
+        return self.manhattan(node["junct"])+node["cost"]
+        
+    # best_first_search
+    #════════════════════════════════════════    
+    def best_first_search(self, ef):
+        def pop_min():
+            node,priority = min(frontier.items(),key=operator.itemgetter(1))
+            del frontier[node]
+            return node,priority
+        root, goal, graph = self.root, self.goal, self.graph
+        self.search_tree = search_tree = nx.DiGraph()
+        search_tree.add_nodes_from([(root,{"cost":0})])
+        self.frontier = frontier = {root:ef({"junct":root,"cost":0})}
+        self.explored = explored = set()
+        self.did_init()
+        while frontier:
+            junct, priority = pop_min()
+            if junct in explored:
+                continue
+            if junct == goal: # return solution
+               path = []
+               while junct is not None:
+                   path.append(junct)
+                   junct = next(search_tree.predecessors(junct),None)
+               path.reverse()
+               self.end(path)
+               return path, search_tree
+            else: # expand
+                junct_cost = search_tree.nodes[junct]["cost"]
+                edges = []
+                for neighbor, attrs in graph.adj[junct].items():
+                    if neighbor in explored:
+                        continue
+                    cost = junct_cost + attrs["cost"]
+                    node = {"junct":neighbor,"cost":cost}
+                    efv = ef(node)
+                    existing = frontier.get(neighbor)
+                    if existing is None or efv < existing:
+                        try: search_tree.remove_node(neighbor)
+                        except: pass                        
+                        frontier[neighbor] = efv
+                        search_tree.add_edge(junct, neighbor)
+                        search_tree.nodes[neighbor]["cost"] = cost
+                        edges.append((junct,neighbor))
+                self.did_expand_node(edges)
+                explored.add(junct)
+        self.end(None)
+        return None, search_tree
+            
 
 # drawing
 #════════════════════════════════════════
@@ -880,11 +922,10 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.smart_dfs()
+    path, search_tree = searcher.best_first_search(searcher.ef_cost)
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
     img = Image.open(path)
     MazeImage(img).process_image()
     img.save(path)
-
