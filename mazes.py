@@ -558,7 +558,7 @@ class MazeImage:
                     graph.add_edges_from([(junct,neighbor,{"cost":cost})])
                     frontier.append(neighbor)
                     if trace:
-                        draw_edge(junct, neighbor, trace_draw)
+                        draw_edge(trace_draw, junct, neighbor)
                         trace_copy = trace_img.copy()
                         trace_copy.info["name"] = str(trace_index).rjust(6,"0")+".tiff"
                         trace_index += 1
@@ -656,7 +656,8 @@ class Searcher:
 
     # breadth-first-search
     #════════════════════════════════════════
-    
+
+    # This is like Searcher.dfs but the frontier is a deque instead of a stack (list)
     def bfs(self):
         root, graph = self.root, self.graph
         self.search_tree = search_tree = nx.DiGraph()
@@ -666,6 +667,47 @@ class Searcher:
         self.did_init()
         while frontier:
             junct = frontier.popleft()
+            if junct in explored:
+                continue
+            self.current = junct
+            self.before_expansion()            
+            for neighbor in graph.neighbors(junct):
+                if neighbor in explored:
+                    continue
+                elif neighbor in search_tree:
+                    # NEIGHBOR is in FRONTIER
+                    continue
+                elif graph.nodes[neighbor].get("is_goal"):
+                    path = [neighbor]
+                    while junct is not None:
+                        path.append(junct)
+                        junct = next(search_tree.predecessors(junct),None)
+                    path.reverse()
+                    self.end(path)
+                    return path, search_tree
+                else:
+                    search_tree.add_edge(junct, neighbor)
+                    self.did_extend_search_tree((junct,neighbor))
+                    frontier.append(neighbor)
+            explored.add(junct)
+        self.end(None)
+        return None, search_tree
+
+    # depth-first-search
+    #════════════════════════════════════════
+
+    # This is like Searcher.bfs but the frontier is a stack (list) instead of a queue (deque)
+    def dfs(self):
+        # It's like BFS except that the frontier is a list used as a stack
+        # instead of a deque used as a queue
+        root, graph = self.root, self.graph
+        self.search_tree = search_tree = nx.DiGraph()
+        search_tree.add_node(root)
+        self.frontier = frontier = [root]
+        self.explored = explored = set()
+        self.did_init()
+        while frontier:
+            junct = frontier.pop()
             if junct in explored:
                 continue
             self.current = junct
@@ -711,7 +753,7 @@ class Searcher:
 
     def did_extend_search_tree(self, edge):
         node1, node2 = edge
-        draw_edge(node1, node2, self.draw)
+        draw_edge(self.draw, node1, node2)
         img_name = self._next_img_name()
         self.canvas.save(os.path.join(self.DIR, img_name),quality=100)
         
@@ -722,8 +764,8 @@ class Searcher:
         
     def end(self, path):
         if path is not None:
-            draw_graph(self.search_tree, self.draw, color=COLOR("gray"))
-            draw_path(path, self.draw)
+            draw_graph(self.draw, self.search_tree, color=COLOR("gray"))
+            draw_path(self.draw, path)
             img_name = self._next_img_name()
             self.canvas.save(os.path.join(self.DIR, img_name))
 
@@ -736,38 +778,37 @@ class Searcher:
 # drawing
 #════════════════════════════════════════
 
-def draw_graph(graph,draw,color=COLOR("black")):
+def draw_graph(draw,graph,color=COLOR("black")):
     for junct1, junct2 in graph.edges:
-        draw_edge(junct1,junct2,draw,color=color)
+        draw_edge(draw,junct1,junct2,color=color)
 
-def draw_node(node, draw, color=COLOR("black")):
+def draw_node(draw, node, color=COLOR("black")):
     x,y = node.top_left
     x1,y1 = x-1,y-1
     x2,y2 = x1+2,y1+2
     draw.rectangle(((x1,y1),(x2,y2)),fill=color,outline=color)
 
-def draw_edge(node1, node2, draw, color=COLOR("black")):
-    draw_node(node1, draw, color); draw_node(node2, draw, color)
+def draw_edge(draw, node1, node2, color=COLOR("black")):
+    draw_node(draw,node1,color); draw_node(draw,node2,color)
     xy1, xy2 = node1.top_left, node2.top_left
     draw.line((xy1,xy2),fill=color,width=1)
 
-def draw_path(nodes,draw,color=(0,0,0)):
+def draw_path(draw, nodes, color=(0,0,0)):
     iter1, iter2 = iter(nodes), iter(nodes)
     try: next(iter2)
     except StopIteration: pass
     for node1,node2 in zip(iter1,iter2):
-        draw_edge(node1, node2, draw, color)
+        draw_edge(draw, node1, node2, color)
 
 # misc scripts
 #════════════════════════════════════════
 
-# search_bfs
-def scratch():
-    img = Image.open("images/maze4.tiff")
+def scratch_search():
+    img = Image.open("images/maze1.tiff")
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.bfs()
+    path, search_tree = searcher.dfs()
     # draw = ImageDraw.Draw(img)
     # draw_graph(search_tree,draw,color=COLOR("gray"))
     # draw_path(path,draw,color=COLOR("black"))
