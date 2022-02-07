@@ -134,9 +134,6 @@ class MazeImage:
                 return False
         return True
     
-    def in_goal(self,xy):
-        return self.closest_color(xy) == self.GOAL
-
     def closest_color(self,xy):
         def dist(color1,color2):
             # manhattan length
@@ -199,9 +196,7 @@ class MazeImage:
                             right_x, bottom_y = x,y
                             raise StopIteration
             except StopIteration: pass
-            width = right_x - top_left[0] + 1
-            height = bottom_y - top_left[1] + 1
-            self._maze_rect = Rect(top_left,width,height)
+            self._maze_rect = Rect(top_left,bottom_right=(right_x,bottom_y))
             return self._maze_rect
 
     def neighbor_pixels(self, xy, directions=None):
@@ -651,7 +646,7 @@ class MazeImage:
         return tuple(tunnels)
 
 class Searcher:
-    def __init__(self,graph,roots=None):
+    def __init__(self,graph):
         self.graph = graph
         self.root = graph.graph["root"]
         self.goal = graph.graph["goal"]
@@ -927,11 +922,11 @@ def draw_path(draw, nodes, color=(0,0,0)):
 #════════════════════════════════════════
 
 def scratch_search():
-    img = Image.open("images/maze1.tiff")
+    img = Image.open("images/maze2.tiff")
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.best_first(searcher.ef_astar_manhattan)
+    path, search_tree = searcher.best_first(searcher.ef_greedy_manhattan)
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
