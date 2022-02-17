@@ -390,7 +390,7 @@ class MazeImage:
                     width, height = self._big_tunnel_dimensions(x,y)
                     self.fill_rect(Rect((x+tunnel_size, y+tunnel_size),
                                         width-2*tunnel_size,
-                                        height-2*tunnel_size)
+                                        height-2*tunnel_size),
                                    color=self.WALL)
 
     def _on_top_left_of_big_tunnel(self, x,y):
@@ -867,6 +867,60 @@ class Searcher:
     def ef_astar_dist(self,node):
         return self.hf_dist(node["junct"])+node["cost"]
 
+    # bidirectional
+    # ════════════════════════════════════════
+    
+    def bidirectional_bfs(self):
+        """Bidirectional search where both directions progress via BFS"""
+        graph = self.graph
+        # This DiGraph will actually contain both search trees.
+        search_tree = self.search_tree = nx.DiGraph()
+        search_tree.add_nodes_from([(self.root, {"source":"root"}),
+                                    (self.goal, {"source":"goal"})])
+        root_frontier, goal_frontier = deque([self.root]), deque([self.goal])
+        root_expanded, goal_expanded = set(), set()
+        sources = {"root": (deque([self.root]),set()),
+                   "goal": (deque([self.goal]),set())}
+        current_source, other_source = "root", "goal"
+        self.did_init()
+        while True:
+            frontier, expanded = sources[current_source]
+            if not frontier:
+                return None
+            junct = frontier.popleft()
+            if junct in expanded:
+                continue
+            edges = []
+            for neighbor in graph.neighbors(junct):
+                if neighbor in expanded:
+                    continue
+                if neighbor in search_tree:
+                    if search_tree.nodes[neighbor]["source"] == other_source:
+                        # We've found a connection between the two search trees
+                        path = []
+                        while junct is not None:
+                            path.append(junct)
+                            junct = next(search_tree.predecessors(junct),None)
+                        path.reverse()
+                        while neighbor is not None:
+                            path.append(neighbor)
+                            neighbor = next(search_tree.predecessors(neighbor),None)
+                        self.end(path)
+                        return path, search_tree
+                    else:
+                        # NEIGHBOR is in the frontier of CURRENT_SOURCE
+                        continue
+                else:
+                    search_tree.add_edge(junct,neighbor)
+                    search_tree.nodes[neighbor]["source"] = current_source
+                    edges.append((junct,neighbor))
+                    frontier.append(neighbor)
+            self.did_expand_node(edges)
+            expanded.add(junct)
+            current_source, other_source = other_source, current_source
+        self.end(None)
+        return None, search_tree
+    
 # drawing
 # ════════════════════════════════════════
 
@@ -903,7 +957,7 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.best_first(searcher.ef_greedy_manhattan)
+    path, search_tree = searcher.bidirectional_bfs()
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
