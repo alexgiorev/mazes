@@ -639,7 +639,7 @@ class Searcher:
         search_tree.add_node(root)
         self.frontier = frontier = deque([root])
         self.explored = explored = set()
-        self.did_init()
+        self.draw_init()
         while frontier:
             junct = frontier.popleft()
             if junct in explored:
@@ -657,15 +657,15 @@ class Searcher:
                         path.append(junct)
                         junct = next(search_tree.predecessors(junct),None)
                     path.reverse()
-                    self.end(path)
+                    self.draw_final_path(path)
                     return path, search_tree
                 else:
                     search_tree.add_edge(junct, neighbor)
                     edges.append((junct,neighbor))
                     frontier.append(neighbor)
-            self.did_expand_node(edges)
+            self.draw_edges(edges)
             explored.add(junct)
-        self.end(None)
+        self.draw_final_path(None)
         return None, search_tree
 
     # depth-first-search
@@ -679,7 +679,7 @@ class Searcher:
         search_tree.add_node(root)
         self.frontier = frontier = [root]
         self.explored = explored = set()
-        self.did_init()
+        self.draw_init()
         while frontier:
             junct = frontier.pop()
             if junct in explored:
@@ -696,14 +696,14 @@ class Searcher:
                         path.append(junct)
                         junct = next(search_tree.predecessors(junct),None)
                     path.reverse()
-                    self.end(path)
+                    self.draw_final_path(path)
                     return path, search_tree
                 else:
                     search_tree.add_edge(junct, neighbor)
-                    self.did_extend_search_tree((junct,neighbor))
+                    self.draw_edge((junct,neighbor))
                     frontier.append(neighbor)
             explored.add(junct)
-        self.end(None)
+        self.draw_final_path(None)
         return None, search_tree
 
     # The difference with Searcher.dfs is that this sorts the children of a node
@@ -716,7 +716,7 @@ class Searcher:
         search_tree.add_node(root)
         self.frontier = frontier = [root]
         self.explored = explored = set()
-        self.did_init()
+        self.draw_init()
         while frontier:
             junct = frontier.pop()
             if junct in explored:
@@ -736,21 +736,21 @@ class Searcher:
                         path.append(junct)
                         junct = next(search_tree.predecessors(junct),None)
                     path.reverse()
-                    self.end(path)
+                    self.draw_final_path(path)
                     return path, search_tree
                 else:
                     search_tree.add_edge(junct, neighbor)
                     edges.append((junct,neighbor))
                     frontier.append(neighbor)
-            self.did_expand_node(edges)
+            self.draw_edges(edges)
             explored.add(junct)
-        self.end(None)
+        self.draw_final_path(None)
         return None, search_tree
 
-    # hooks
+    # drawing
     # ════════════════════════════════════════
     
-    def did_init(self):
+    def draw_init(self):
         self.DIR = DIR = "search_result"
         try:
             shutil.rmtree(DIR)
@@ -766,13 +766,13 @@ class Searcher:
                   size=7, color=COLOR("darkblue"))
         self._save_canvas()
 
-    def did_extend_search_tree(self, edge):
+    def draw_edge(self, edge):
         node1, node2 = edge
         draw_node(self.draw, node2)
         draw_edge(self.draw, node1, node2)
         self._save_canvas()
 
-    def did_expand_node(self, edges):
+    def draw_edges(self, edges):
         if edges:
             for node1, node2 in edges:
                 draw_node(self.draw, node2)
@@ -788,7 +788,7 @@ class Searcher:
         self.iter_count += 1
         return img_name
 
-    def end(self, path):
+    def draw_final_path(self, path):
         if path is not None:
             draw_graph(self.draw, self.search_tree, color=COLOR("gray"))
             draw_path(self.draw, path)
@@ -807,7 +807,7 @@ class Searcher:
         search_tree.add_nodes_from([(root,{"cost":0})])
         self.frontier = frontier = {root:ef({"junct":root,"cost":0})}
         self.explored = explored = set()
-        self.did_init()
+        self.draw_init()
         while frontier:
             junct, priority = pop_min()
             if junct in explored:
@@ -818,7 +818,7 @@ class Searcher:
                    path.append(junct)
                    junct = next(search_tree.predecessors(junct),None)
                path.reverse()
-               self.end(path)
+               self.draw_final_path(path)
                return path, search_tree
             else: # expand
                 junct_cost = search_tree.nodes[junct]["cost"]
@@ -837,9 +837,9 @@ class Searcher:
                         search_tree.add_edge(junct, neighbor)
                         search_tree.nodes[neighbor]["cost"] = cost
                         edges.append((junct,neighbor))
-                self.did_expand_node(edges)
+                self.draw_edges(edges)
                 explored.add(junct)
-        self.end(None)
+        self.draw_final_path(None)
         return None, search_tree
 
     # heuristic and evaluation functions
@@ -882,7 +882,7 @@ class Searcher:
         sources = {"root": (deque([self.root]),set()),
                    "goal": (deque([self.goal]),set())}
         current_source, other_source = "root", "goal"
-        self.did_init()
+        self.draw_init()
         while True:
             frontier, expanded = sources[current_source]
             if not frontier:
@@ -905,7 +905,7 @@ class Searcher:
                         while neighbor is not None:
                             path.append(neighbor)
                             neighbor = next(search_tree.predecessors(neighbor),None)
-                        self.end(path)
+                        self.draw_final_path(path)
                         return path, search_tree
                     else:
                         # NEIGHBOR is in the frontier of CURRENT_SOURCE
@@ -915,10 +915,10 @@ class Searcher:
                     search_tree.nodes[neighbor]["source"] = current_source
                     edges.append((junct,neighbor))
                     frontier.append(neighbor)
-            self.did_expand_node(edges)
+            self.draw_edges(edges)
             expanded.add(junct)
             current_source, other_source = other_source, current_source
-        self.end(None)
+        self.draw_final_path(None)
         return None, search_tree
     
 # drawing
