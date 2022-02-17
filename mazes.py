@@ -661,7 +661,7 @@ class Searcher:
     # search
     # ════════════════════════════════════════
     
-    def _search(self):
+    def _search(self,neighbor_sort=None):
         """Assumes (self.Frontier) is the frontier constructor"""
         root, goal, graph, frontier = self.root, self.goal, self.graph, self.frontier
         frontier.push(root)
@@ -674,7 +674,11 @@ class Searcher:
             if junct in explored:
                 continue
             edges = []
-            for neighbor in graph.neighbors(junct):
+            neighbors = list(graph.neighbors(junct))
+            if neighbor_sort is not None:
+                key, reverse = neighbor_sort
+                neighbors.sort(key=key,reverse=reverse)
+            for neighbor in neighbors:
                 if neighbor in explored:
                     continue
                 elif neighbor in search_tree:
@@ -704,50 +708,9 @@ class Searcher:
         self.frontier = self.DFS_Frontier()
         return self._search()
     def smart_dfs(self, hf=None):
-        raise NotImplementedError
         if hf is None: hf = self.hf_manhattan
-        self.Frontier = self.SDFS_Frontier(hf)
-        return self._search()
-
-    # depth-first-search
-    # ════════════════════════════════════════
-    def smart_dfs(self, hf=None):
-        if hf is None: hf = self.hf_manhattan
-        root, goal, graph = self.root, self.goal, self.graph
-        self.search_tree = search_tree = nx.DiGraph()
-        search_tree.add_node(root)
-        self.frontier = frontier = [root]
-        self.explored = explored = set()
-        self.draw_init()
-        while frontier:
-            junct = frontier.pop()
-            if junct in explored:
-                continue
-            # HERE is where the difference with Searcher.dfs manifests
-            neighbors = sorted(graph.neighbors(junct),key=hf,reverse=True)
-            edges = []
-            for neighbor in neighbors:
-                if neighbor in explored:
-                    continue
-                elif neighbor in search_tree:
-                    # NEIGHBOR is in FRONTIER
-                    continue
-                elif neighbor == goal:
-                    path = [neighbor]
-                    while junct is not None:
-                        path.append(junct)
-                        junct = next(search_tree.predecessors(junct),None)
-                    path.reverse()
-                    self.draw_final_path(path)
-                    return path, search_tree
-                else:
-                    search_tree.add_edge(junct, neighbor)
-                    edges.append((junct,neighbor))
-                    frontier.append(neighbor)
-            self.draw_edges(edges)
-            explored.add(junct)
-        self.draw_final_path(None)
-        return None, search_tree
+        self.frontier = self.DFS_Frontier()
+        return self._search(neighbor_sort=(hf,True))
 
     # best first search (UCS, Greedy, A*)
     # ════════════════════════════════════════
@@ -963,7 +926,7 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.bfs()
+    path, search_tree = searcher.smart_dfs()
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
