@@ -631,11 +631,11 @@ class Searcher:
     # frontiers
     # ════════════════════════════════════════
     class Frontier:
+        def __bool__(self):
+            raise NotImplementedError
         def push(self,item):
             raise NotImplementedError
         def pop(self):
-            raise NotImplementedError
-        def __bool__(self):
             raise NotImplementedError
 
     class BFS_Frontier(Frontier):
@@ -658,26 +658,42 @@ class Searcher:
         def pop(self):
             return self.stack.pop()
 
+    class BestFirst_Frontier(Frontier):
+        def __init__(self, ef):
+            self.ef = ef
+            self.dict = {}
+        def __bool__(self):
+            return bool(self.dict)
+        def push(self, junct):
+            self.dict[junct] = self.ef(junct)
+        def pop(self):
+            node,priority = min(self.dict.items(), operator.itemgetter(1))
+            del self.dict[node]
+            return node
+
     # search
     # ════════════════════════════════════════
     
-    def _search(self,neighbor_sort=None):
-        """Assumes (self.Frontier) is the frontier constructor"""
+    def _search(self,
+                neighbor_sort=None,
+                return_goal_immediately=True):
+        """Assumes (self.frontier) is set"""
         root, goal, graph, frontier = self.root, self.goal, self.graph, self.frontier
         frontier.push(root)
         self.search_tree = search_tree = nx.DiGraph()
-        search_tree.add_node(root)
+        search_tree.add_nodes_from([(root,{"cost":0})])
         self.explored = explored = set()
         self.draw_init()
         while frontier:
             junct = frontier.pop()
             if junct in explored:
                 continue
-            edges = []
+            junct_cost = search_tree.nodes[junct]["cost"]
             neighbors = list(graph.neighbors(junct))
             if neighbor_sort is not None:
                 key, reverse = neighbor_sort
                 neighbors.sort(key=key,reverse=reverse)
+            edges = []
             for neighbor in neighbors:
                 if neighbor in explored:
                     continue
@@ -693,33 +709,35 @@ class Searcher:
                     self.draw_final_path(path)
                     return path, search_tree
                 else:
-                    search_tree.add_edge(junct, neighbor)
-                    edges.append((junct,neighbor))
+                    edge = (junct,neighbor)
+                    edge_cost = graph.edges[edge]["cost"]
+                    search_tree.add_edge(*edge)
+                    search_tree.nodes[neighbor]["cost"] = junct_cost+edge_cost
+                    edges.append(edge)
                     frontier.push(neighbor)
             self.draw_edges(edges)
             explored.add(junct)
         self.draw_final_path(None)
         return None, search_tree
         
-    def bfs(self):
+    def breadth_first(self):
         self.frontier = self.BFS_Frontier()
         return self._search()
-    def dfs(self):
+    def depth_first(self):
         self.frontier = self.DFS_Frontier()
         return self._search()
-    def smart_dfs(self, hf=None):
+    def smart_depth_first(self, hf=None):
         if hf is None: hf = self.hf_manhattan
         self.frontier = self.DFS_Frontier()
         return self._search(neighbor_sort=(hf,True))
+    def best_first(self,ef):
+        self.frontier = self.Best_First_Frontier(ef)
+        raise NotImplementedError
 
     # best first search (UCS, Greedy, A*)
     # ════════════════════════════════════════
     
     def best_first(self, ef):
-        def pop_min():
-            node,priority = min(frontier.items(),key=operator.itemgetter(1))
-            del frontier[node]
-            return node,priority
         root, goal, graph = self.root, self.goal, self.graph
         self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_nodes_from([(root,{"cost":0})])
@@ -926,7 +944,7 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.smart_dfs()
+    path, search_tree = searcher.smart_depth_first()
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
