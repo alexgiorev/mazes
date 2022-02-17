@@ -4,6 +4,7 @@ import networkx as nx
 import pdb
 import os
 import shutil
+import operator
 
 from PIL import Image, ImageDraw, ImageColor
 COLOR = ImageColor.getrgb
@@ -637,14 +638,20 @@ class Searcher:
             raise NotImplementedError
         def pop(self):
             raise NotImplementedError
+        def replace(self,item):
+            """Called when (item)'s parent is being expanded, and
+            (item["junct"]) is already in the frontier (self). Updates itself
+            when appropriate and returns True or False to signal whether an
+            update actually happened"""
+            return False
 
     class BFS_Frontier(Frontier):
         def __init__(self):
             self.deque = deque()
         def __bool__(self):
             return bool(self.deque)
-        def push(self, junct):
-            self.deque.append(junct)
+        def push(self, item):
+            self.deque.append(item)
         def pop(self):
             return self.deque.popleft()
 
@@ -653,42 +660,52 @@ class Searcher:
             self.stack = []
         def __bool__(self):
             return bool(self.stack)            
-        def push(self, junct):
-            self.stack.append(junct)
+        def push(self, item):
+            self.stack.append(item)
         def pop(self):
             return self.stack.pop()
 
     class BestFirst_Frontier(Frontier):
-        def __init__(self, ef):
+        def __init__(self, searcher, ef):
+            self.searcher = searcher
             self.ef = ef
-            self.dict = {}
+            self.priorities = {}
         def __bool__(self):
-            return bool(self.dict)
-        def push(self, junct):
-            self.dict[junct] = self.ef(junct)
+            return bool(self.priorities)
+        def push(self, item):
+            self.priorities[item["junct"]] = (self.ef(item),item)
         def pop(self):
-            node,priority = min(self.dict.items(), operator.itemgetter(1))
-            del self.dict[node]
-            return node
+            priority,item = min(self.priorities.values(),
+                                key=operator.itemgetter(0))
+            del self.priorities[item["junct"]]
+            return item
+        def replace(self, item):
+            junct = item["junct"]
+            new_priority = self.ef(item)
+            if new_priority < self.priorities[junct][0]:
+                self.priorities[junct] = (new_priority,item)
+                return True
+            return False
 
     # search
-    # ════════════════════════════════════════
-    
-    def _search(self,
-                neighbor_sort=None,
-                return_goal_immediately=True):
+    # ════════════════════════════════════════    
+    def _search(self, neighbor_sort=None, return_goal_immediately=True):
         """Assumes (self.frontier) is set"""
         root, goal, graph, frontier = self.root, self.goal, self.graph, self.frontier
-        frontier.push(root)
+        frontier.push({"junct":root,"parent":None,"cost":0})
         self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_nodes_from([(root,{"cost":0})])
         self.explored = explored = set()
         self.draw_init()
         while frontier:
-            junct = frontier.pop()
+            item = frontier.pop()
+            junct, junct_cost = item["junct"], item["cost"]
+            if junct == goal:
+                path = self._goal_path()
+                self.draw_goal_path(path)
+                return path, search_tree
             if junct in explored:
                 continue
-            junct_cost = search_tree.nodes[junct]["cost"]
             neighbors = list(graph.neighbors(junct))
             if neighbor_sort is not None:
                 key, reverse = neighbor_sort
@@ -697,29 +714,40 @@ class Searcher:
             for neighbor in neighbors:
                 if neighbor in explored:
                     continue
-                elif neighbor in search_tree:
-                    # NEIGHBOR is in FRONTIER
-                    continue
-                elif neighbor == goal:
-                    path = [neighbor]
-                    while junct is not None:
-                        path.append(junct)
-                        junct = next(search_tree.predecessors(junct),None)
-                    path.reverse()
-                    self.draw_final_path(path)
+                edge = (junct,neighbor)
+                edge_cost = self.graph.edges[edge]["cost"]
+                neighbor_cost = junct_cost + edge_cost
+                neighbor_item = {"junct":neighbor,"parent":junct,"cost":neighbor_cost}
+                if neighbor in search_tree: # NEIGHBOR is in FRONTIER
+                    if frontier.replace(neighbor_item):
+                        search_tree.remove_node(neighbor)
+                        search_tree.add_edge(*edge)
+                        search_tree.nodes[neighbor]["cost"] = neighbor_cost
+                elif neighbor == goal and return_goal_immediately:
+                    search_tree.add_edge(*edge)
+                    path = self._goal_path()
+                    self.draw_goal_path(path)
                     return path, search_tree
                 else:
-                    edge = (junct,neighbor)
-                    edge_cost = graph.edges[edge]["cost"]
                     search_tree.add_edge(*edge)
-                    search_tree.nodes[neighbor]["cost"] = junct_cost+edge_cost
+                    search_tree.nodes[neighbor]["cost"] = neighbor_cost
+                    frontier.push(neighbor_item)
                     edges.append(edge)
-                    frontier.push(neighbor)
             self.draw_edges(edges)
             explored.add(junct)
-        self.draw_final_path(None)
+        self.draw_goal_path(None)
         return None, search_tree
-        
+
+    def _goal_path(self):
+        """Assumes a path has been found in (self.search_tree) from the root to the goal"""
+        current = self.goal
+        path = []
+        while current is not None:
+            path.append(current)
+            current = next(self.search_tree.predecessors(current),None)
+        path.reverse()
+        return path
+    
     def breadth_first(self):
         self.frontier = self.BFS_Frontier()
         return self._search()
@@ -731,52 +759,35 @@ class Searcher:
         self.frontier = self.DFS_Frontier()
         return self._search(neighbor_sort=(hf,True))
     def best_first(self,ef):
-        self.frontier = self.Best_First_Frontier(ef)
-        raise NotImplementedError
+        self.frontier = self.BestFirst_Frontier(self,ef)
+        return self._search(return_goal_immediately=False)
 
-    # best first search (UCS, Greedy, A*)
+    # heuristic and evaluation functions
     # ════════════════════════════════════════
     
-    def best_first(self, ef):
-        root, goal, graph = self.root, self.goal, self.graph
-        self.search_tree = search_tree = nx.DiGraph()
-        search_tree.add_nodes_from([(root,{"cost":0})])
-        self.frontier = frontier = {root:ef({"junct":root,"cost":0})}
-        self.explored = explored = set()
-        self.draw_init()
-        while frontier:
-            junct, priority = pop_min()
-            if junct in explored:
-                continue
-            if junct == goal: # return solution
-               path = []
-               while junct is not None:
-                   path.append(junct)
-                   junct = next(search_tree.predecessors(junct),None)
-               path.reverse()
-               self.draw_final_path(path)
-               return path, search_tree
-            else: # expand
-                junct_cost = search_tree.nodes[junct]["cost"]
-                edges = []
-                for neighbor, attrs in graph.adj[junct].items():
-                    if neighbor in explored:
-                        continue
-                    cost = junct_cost + attrs["cost"]
-                    node = {"junct":neighbor,"cost":cost}
-                    efv = ef(node)
-                    existing = frontier.get(neighbor)
-                    if existing is None or efv < existing:
-                        try: search_tree.remove_node(neighbor)
-                        except: pass                        
-                        frontier[neighbor] = efv
-                        search_tree.add_edge(junct, neighbor)
-                        search_tree.nodes[neighbor]["cost"] = cost
-                        edges.append((junct,neighbor))
-                self.draw_edges(edges)
-                explored.add(junct)
-        self.draw_final_path(None)
-        return None, search_tree
+    def hf_manhattan(self,item):
+        junct = item["junct"]
+        (x1,y1),(x2,y2) = junct.top_left, self.goal.top_left
+        return abs(x1-x2)+abs(y1-y2)
+
+    def hf_dist(self,item):
+        junct = item["junct"]
+        return math.dist(junct.top_left, self.goal.top_left)
+
+    def ef_cost(self,item):
+        return item["cost"]
+
+    def ef_greedy_manhattan(self,item):
+        return self.hf_manhattan(item)
+
+    def ef_greedy_dist(self,item):
+        return self.hf_dist(item)
+
+    def ef_astar_manhattan(self,item):
+        return self.hf_manhattan(item)+item["cost"]
+
+    def ef_astar_dist(self,item):
+        return self.hf_dist(item)+item["cost"]
 
     # bidirectional
     # ════════════════════════════════════════
@@ -819,7 +830,7 @@ class Searcher:
                         while neighbor is not None:
                             path.append(neighbor)
                             neighbor = next(search_tree.predecessors(neighbor),None)
-                        self.draw_final_path(path)
+                        self.draw_goal_path(path)
                         return path, search_tree
                     else:
                         # NEIGHBOR is in the frontier of CURRENT_SOURCE
@@ -832,7 +843,7 @@ class Searcher:
             self.draw_edges(edges)
             expanded.add(junct)
             current_source, other_source = other_source, current_source
-        self.draw_final_path(None)
+        self.draw_goal_path(None)
         return None, search_tree
 
     # drawing
@@ -876,37 +887,11 @@ class Searcher:
         self.iter_count += 1
         return img_name
 
-    def draw_final_path(self, path):
+    def draw_goal_path(self, path):
         if path is not None:
             draw_graph(self.draw, self.search_tree, color=COLOR("gray"))
             draw_path(self.draw, path)
             self._save_canvas()
-    
-    # heuristic and evaluation functions
-    # ════════════════════════════════════════
-    
-    def hf_manhattan(self,junct):
-        (x1,y1),(x2,y2) = junct.top_left, self.goal.top_left
-        return abs(x1-x2)+abs(y1-y2)
-
-    def hf_dist(self,junct):
-        return math.dist(junct.top_left, self.goal.top_left)
-
-    def ef_cost(self,node):
-        return node["cost"]
-
-    def ef_greedy_manhattan(self,node):
-        return self.hf_manhattan(node["junct"])
-
-    def ef_greedy_dist(self,node):
-        return self.hf_dist(node["junct"])
-
-    def ef_astar_manhattan(self,node):
-        return self.hf_manhattan(node["junct"])+node["cost"]
-
-    def ef_astar_dist(self,node):
-        return self.hf_dist(node["junct"])+node["cost"]
-
     
 # drawing
 # ════════════════════════════════════════
@@ -944,7 +929,7 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.smart_depth_first()
+    path, search_tree = searcher.best_first(searcher.ef_astar_manhattan)
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
