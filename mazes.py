@@ -627,20 +627,50 @@ class Searcher:
         self.graph = graph
         self.root = graph.graph["root"]
         self.goal = graph.graph["goal"]
-    
-    # breadth-first-search
+
+    # frontiers
     # ════════════════════════════════════════
-    # This is like Searcher.dfs but the frontier
-    # is a deque instead of a stack (list)
-    def bfs(self):
-        root, goal, graph = self.root, self.goal, self.graph
+    class Frontier:
+        def push(self,item):
+            raise NotImplementedError
+        def pop(self):
+            raise NotImplementedError
+        def __bool__(self):
+            raise NotImplementedError
+
+    class BFS_Frontier(Frontier):
+        def __init__(self):
+            self.deque = deque()
+        def __bool__(self):
+            return bool(self.deque)
+        def push(self, junct):
+            self.deque.append(junct)
+        def pop(self):
+            return self.deque.popleft()
+
+    class DFS_Frontier(Frontier):
+        def __init__(self):
+            self.stack = []
+        def __bool__(self):
+            return bool(self.stack)            
+        def push(self, junct):
+            self.stack.append(junct)
+        def pop(self):
+            return self.stack.pop()
+
+    # search
+    # ════════════════════════════════════════
+    
+    def _search(self):
+        """Assumes (self.Frontier) is the frontier constructor"""
+        root, goal, graph, frontier = self.root, self.goal, self.graph, self.frontier
+        frontier.push(root)
         self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_node(root)
-        self.frontier = frontier = deque([root])
         self.explored = explored = set()
         self.draw_init()
         while frontier:
-            junct = frontier.popleft()
+            junct = frontier.pop()
             if junct in explored:
                 continue
             edges = []
@@ -661,52 +691,26 @@ class Searcher:
                 else:
                     search_tree.add_edge(junct, neighbor)
                     edges.append((junct,neighbor))
-                    frontier.append(neighbor)
+                    frontier.push(neighbor)
             self.draw_edges(edges)
             explored.add(junct)
         self.draw_final_path(None)
         return None, search_tree
+        
+    def bfs(self):
+        self.frontier = self.BFS_Frontier()
+        return self._search()
+    def dfs(self):
+        self.frontier = self.DFS_Frontier()
+        return self._search()
+    def smart_dfs(self, hf=None):
+        raise NotImplementedError
+        if hf is None: hf = self.hf_manhattan
+        self.Frontier = self.SDFS_Frontier(hf)
+        return self._search()
 
     # depth-first-search
     # ════════════════════════════════════════
-
-    # This is like Searcher.bfs but the frontier
-    # is a stack (list) instead of a queue (deque)
-    def dfs(self):
-        root, goal, graph = self.root, self.goal, self.graph
-        self.search_tree = search_tree = nx.DiGraph()
-        search_tree.add_node(root)
-        self.frontier = frontier = [root]
-        self.explored = explored = set()
-        self.draw_init()
-        while frontier:
-            junct = frontier.pop()
-            if junct in explored:
-                continue
-            for neighbor in graph.neighbors(junct):
-                if neighbor in explored:
-                    continue
-                elif neighbor in search_tree:
-                    # NEIGHBOR is in FRONTIER
-                    continue
-                elif neighbor == goal:
-                    path = [neighbor]
-                    while junct is not None:
-                        path.append(junct)
-                        junct = next(search_tree.predecessors(junct),None)
-                    path.reverse()
-                    self.draw_final_path(path)
-                    return path, search_tree
-                else:
-                    search_tree.add_edge(junct, neighbor)
-                    self.draw_edge((junct,neighbor))
-                    frontier.append(neighbor)
-            explored.add(junct)
-        self.draw_final_path(None)
-        return None, search_tree
-
-    # The difference with Searcher.dfs is that this sorts the children of a node
-    # based on the heuristic function HF before adding them to the frontier
     def smart_dfs(self, hf=None):
         if hf is None: hf = self.hf_manhattan
         root, goal, graph = self.root, self.goal, self.graph
@@ -959,7 +963,7 @@ def scratch_search():
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
-    path, search_tree = searcher.bidirectional_bfs()
+    path, search_tree = searcher.bfs()
 
 def process_image(fullname):
     path = os.path.join("images",fullname)
