@@ -627,10 +627,9 @@ class Searcher:
         self.graph = graph
         self.root = graph.graph["root"]
         self.goal = graph.graph["goal"]
-
+    
     # breadth-first-search
     # ════════════════════════════════════════
-
     # This is like Searcher.dfs but the frontier
     # is a deque instead of a stack (list)
     def bfs(self):
@@ -709,8 +708,7 @@ class Searcher:
     # The difference with Searcher.dfs is that this sorts the children of a node
     # based on the heuristic function HF before adding them to the frontier
     def smart_dfs(self, hf=None):
-        if hf is None:
-            hf = self.hf_manhattan
+        if hf is None: hf = self.hf_manhattan
         root, goal, graph = self.root, self.goal, self.graph
         self.search_tree = search_tree = nx.DiGraph()
         search_tree.add_node(root)
@@ -746,53 +744,6 @@ class Searcher:
             explored.add(junct)
         self.draw_final_path(None)
         return None, search_tree
-
-    # drawing
-    # ════════════════════════════════════════
-    
-    def draw_init(self):
-        self.DIR = DIR = "search_result"
-        try:
-            shutil.rmtree(DIR)
-        except FileNotFoundError:
-            pass
-        os.mkdir(DIR)
-        self.iter_count = 0
-        self.canvas = self.graph.graph["image"].copy()
-        self.draw = ImageDraw.Draw(self.canvas)
-        draw_node(self.draw, self.root,
-                  size=7, color=COLOR("darkred"))
-        draw_node(self.draw, self.goal,
-                  size=7, color=COLOR("darkblue"))
-        self._save_canvas()
-
-    def draw_edge(self, edge):
-        node1, node2 = edge
-        draw_node(self.draw, node2)
-        draw_edge(self.draw, node1, node2)
-        self._save_canvas()
-
-    def draw_edges(self, edges):
-        if edges:
-            for node1, node2 in edges:
-                draw_node(self.draw, node2)
-                draw_edge(self.draw, node1, node2)
-            self._save_canvas()
-    
-    def _save_canvas(self):
-        img_name = self._next_img_name()
-        self.canvas.save(os.path.join(self.DIR, img_name),quality=100)
-        
-    def _next_img_name(self):
-        img_name = f"{str(self.iter_count).rjust(6,'0')}.jpg"
-        self.iter_count += 1
-        return img_name
-
-    def draw_final_path(self, path):
-        if path is not None:
-            draw_graph(self.draw, self.search_tree, color=COLOR("gray"))
-            draw_path(self.draw, path)
-            self._save_canvas()
 
     # best first search (UCS, Greedy, A*)
     # ════════════════════════════════════════
@@ -842,54 +793,32 @@ class Searcher:
         self.draw_final_path(None)
         return None, search_tree
 
-    # heuristic and evaluation functions
-    # ════════════════════════════════════════
-    
-    def hf_manhattan(self,junct):
-        (x1,y1),(x2,y2) = junct.top_left, self.goal.top_left
-        return abs(x1-x2)+abs(y1-y2)
-
-    def hf_dist(self,junct):
-        return math.dist(junct.top_left, self.goal.top_left)
-
-    def ef_cost(self,node):
-        return node["cost"]
-
-    def ef_greedy_manhattan(self,node):
-        return self.hf_manhattan(node["junct"])
-
-    def ef_greedy_dist(self,node):
-        return self.hf_dist(node["junct"])
-
-    def ef_astar_manhattan(self,node):
-        return self.hf_manhattan(node["junct"])+node["cost"]
-
-    def ef_astar_dist(self,node):
-        return self.hf_dist(node["junct"])+node["cost"]
-
     # bidirectional
     # ════════════════════════════════════════
-    
+            
     def bidirectional_bfs(self):
         """Bidirectional search where both directions progress via BFS"""
         graph = self.graph
-        # This DiGraph will actually contain both search trees.
+        # This DiGraph will contain both search trees. Nodes which stem from the
+        # root will have a "source" attribute equal to "root", while those
+        # stemming form the goal will have a "source" equal to "goal"
         search_tree = self.search_tree = nx.DiGraph()
         search_tree.add_nodes_from([(self.root, {"source":"root"}),
                                     (self.goal, {"source":"goal"})])
-        root_frontier, goal_frontier = deque([self.root]), deque([self.goal])
-        root_expanded, goal_expanded = set(), set()
         sources = {"root": (deque([self.root]),set()),
                    "goal": (deque([self.goal]),set())}
         current_source, other_source = "root", "goal"
         self.draw_init()
         while True:
-            frontier, expanded = sources[current_source]
-            if not frontier:
-                return None
-            junct = frontier.popleft()
-            if junct in expanded:
-                continue
+            self.frontier, self.expanded = sources[current_source]
+            self.frontier = frontier
+            self.expanded = expanded
+            # Take a junct which hasn't already been expanded
+            while True:
+                if not frontier: return None
+                junct = frontier.popleft()
+                if junct not in expanded:
+                    break
             edges = []
             for neighbor in graph.neighbors(junct):
                 if neighbor in expanded:
@@ -920,6 +849,79 @@ class Searcher:
             current_source, other_source = other_source, current_source
         self.draw_final_path(None)
         return None, search_tree
+
+    # drawing
+    # ════════════════════════════════════════
+    
+    def draw_init(self):
+        self.DIR = DIR = "search_result"
+        try:
+            shutil.rmtree(DIR)
+        except FileNotFoundError:
+            pass
+        os.mkdir(DIR)
+        self.iter_count = 0
+        self.canvas = self.graph.graph["image"].copy()
+        self.draw = ImageDraw.Draw(self.canvas)
+        draw_node(self.draw, self.root,
+                  size=7, color=COLOR("darkred"))
+        draw_node(self.draw, self.goal,
+                  size=7, color=COLOR("darkblue"))
+        self._save_canvas()
+
+    def draw_edge(self, edge):
+        node1, node2 = edge
+        draw_node(self.draw, node2)
+        draw_edge(self.draw, node1, node2)
+        self._save_canvas()
+
+    def draw_edges(self, edges):
+        if edges:
+            for node1, node2 in edges:
+                draw_node(self.draw, node2)
+                draw_edge(self.draw, node1, node2)
+            self._save_canvas()
+    
+    def _save_canvas(self):
+        img_name = self._next_img_name()
+        self.canvas.save(os.path.join(self.DIR, img_name),quality=100)
+        
+    def _next_img_name(self):
+        img_name = f"{str(self.iter_count).rjust(6,'0')}.jpg"
+        self.iter_count += 1
+        return img_name
+
+    def draw_final_path(self, path):
+        if path is not None:
+            draw_graph(self.draw, self.search_tree, color=COLOR("gray"))
+            draw_path(self.draw, path)
+            self._save_canvas()
+    
+    # heuristic and evaluation functions
+    # ════════════════════════════════════════
+    
+    def hf_manhattan(self,junct):
+        (x1,y1),(x2,y2) = junct.top_left, self.goal.top_left
+        return abs(x1-x2)+abs(y1-y2)
+
+    def hf_dist(self,junct):
+        return math.dist(junct.top_left, self.goal.top_left)
+
+    def ef_cost(self,node):
+        return node["cost"]
+
+    def ef_greedy_manhattan(self,node):
+        return self.hf_manhattan(node["junct"])
+
+    def ef_greedy_dist(self,node):
+        return self.hf_dist(node["junct"])
+
+    def ef_astar_manhattan(self,node):
+        return self.hf_manhattan(node["junct"])+node["cost"]
+
+    def ef_astar_dist(self,node):
+        return self.hf_dist(node["junct"])+node["cost"]
+
     
 # drawing
 # ════════════════════════════════════════
@@ -953,7 +955,7 @@ def draw_path(draw, nodes, color=(0,0,0)):
 # ════════════════════════════════════════
 
 def scratch_search():
-    img = Image.open("images/maze2.tiff")
+    img = Image.open("images/maze3.tiff")
     mimg = MazeImage(img)
     graph = mimg.graph()
     searcher = Searcher(graph)
